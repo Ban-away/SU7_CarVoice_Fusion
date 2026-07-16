@@ -80,7 +80,7 @@ def report_score(
 def extract_keywords(text: str, top_n: int = 10) -> list[str]:
     """Extract likely keywords from reference text using simple heuristics."""
     # Remove punctuation, split, filter short tokens
-    cleaned = re.sub(r"[，。！？、；：""''（）【】《》\s]", " ", text)
+    cleaned = re.sub(r"[，。！？、；：""''（）【】《》 ]", " ", text)
     tokens = [t.strip() for t in cleaned.split() if len(t.strip()) >= 2]
     # Simple TF heuristic: longer tokens and those with technical characters
     scored = sorted(tokens, key=lambda t: (
