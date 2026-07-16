@@ -1,0 +1,1 @@
+"""Gateway 层 — 统一入口（HTTP + WebSocket）。"""

@@ -1,7 +1,15 @@
 from dataclasses import dataclass
 from typing import Callable
 
-from app.services.skills import handlers
+from app.services.skills.handlers import (
+    charging,
+    climate,
+    media_control,
+    navigation,
+    safety,
+    vehicle_status,
+    window,
+)
 
 
 @dataclass(frozen=True)
@@ -27,7 +35,7 @@ class SkillsRegistry:
                 "infotainment",
                 "控制媒体播放与切歌",
                 ("播放", "暂停", "下一首", "音乐"),
-                handlers.media_control,
+                media_control.handle,
             ),
             SkillSpec(
                 "navigate_to",
@@ -35,7 +43,7 @@ class SkillsRegistry:
                 "navigation",
                 "执行导航与目的地跳转",
                 ("导航", "前往", "去"),
-                handlers.navigate_to,
+                navigation.handle,
             ),
             SkillSpec(
                 "vehicle_status",
@@ -43,7 +51,7 @@ class SkillsRegistry:
                 "vehicle",
                 "查询车辆健康、电量与状态",
                 ("电量", "胎压", "续航", "状态"),
-                handlers.vehicle_status,
+                vehicle_status.handle,
             ),
             SkillSpec(
                 "ac_control",
@@ -51,7 +59,7 @@ class SkillsRegistry:
                 "climate",
                 "控制空调温度与风量",
                 ("空调", "温度", "制冷", "制热"),
-                handlers.ac_control,
+                climate.handle,
             ),
             SkillSpec(
                 "window_control",
@@ -59,7 +67,7 @@ class SkillsRegistry:
                 "vehicle",
                 "控制车窗开闭",
                 ("车窗", "开窗", "关窗"),
-                handlers.window_control,
+                window.handle,
             ),
             SkillSpec(
                 "charge_management",
@@ -67,7 +75,7 @@ class SkillsRegistry:
                 "energy",
                 "查询充电状态与预约充电",
                 ("充电", "补能", "预约充电"),
-                handlers.charge_management,
+                charging.handle,
             ),
             SkillSpec(
                 "sensitive_vehicle_control",
@@ -75,7 +83,7 @@ class SkillsRegistry:
                 "safety",
                 "高风险车辆控制能力（需要二次确认）",
                 ("自动驾驶", "关闭安全", "解锁车辆", "远程控制"),
-                handlers.sensitive_vehicle_control,
+                safety.handle,
             ),
         ):
             self._skills[spec.name] = spec
