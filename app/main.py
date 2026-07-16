@@ -1,15 +1,27 @@
+"""SU7_CarVoice_Fusion — FastAPI application entry point.
+
+Complete fusion of CarVoice_Agent (real-time sessions, task skills,
+NLU/NLG/arbitration) + XIAOMI_SU7_RAG (knowledge retrieval, RAG pipeline,
+data pipeline, evaluation).
+"""
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.gateway.http_api import router as http_router
-from app.gateway.ws_api import router as ws_router
+from app.api.http_routes import router as http_router
+from app.api.ws_routes import router as ws_router
 from app.shared.errors import AppError
 from app.shared.logging import configure_logging, get_logger
 
 configure_logging()
 logger = get_logger(__name__)
 
-app = FastAPI(title="SU7 CarVoice Fusion")
+app = FastAPI(
+    title="SU7 CarVoice Fusion",
+    description="车载智能语音助手融合架构 — CarVoice_Agent + XIAOMI_SU7_RAG",
+    version="0.2.0",
+)
+
 app.include_router(http_router)
 app.include_router(ws_router)
 
