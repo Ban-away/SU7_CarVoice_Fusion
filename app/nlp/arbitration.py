@@ -12,8 +12,8 @@ from app.shared.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# A=Task, B=FAQ, C=Chitchat, D=Noise
-_CLASS_MAP = {"A": "task", "B": "faq", "C": "chat", "D": "unknown"}
+# A=Task, B=FAQ, C=Chitchat, D=Noise (D also → chat per CarVoice original)
+_CLASS_MAP = {"A": "task", "B": "faq", "C": "chat", "D": "chat"}
 
 
 @dataclass

@@ -1,8 +1,13 @@
-"""Hybrid retriever combining BM25 (sparse) + FAISS (dense) with WRRF fusion.
+"""Hybrid retriever — BM25 (sparse) + Milvus/FAISS (dense) with WRRF fusion.
 
-Each sub-retriever independently searches the same document set, and
-results are fused using Weighted Reciprocal Rank Fusion.
+Matches the original XIAOMI_SU7_RAG pipeline:
+  BM25 (top-N) + Milvus (top-N) → WRRF fusion → top-K
+
+When ``dense_backend="milvus"`` (default), uses BGE+SPLADE Milvus hybrid.
+When ``dense_backend="faiss"``, uses sentence-transformers FAISS.
 """
+
+from __future__ import annotations
 
 import logging
 import time
@@ -10,78 +15,77 @@ import time
 from app.knowledge.models import RetrievedDoc, RetrieveResult
 from app.knowledge.retriever.base import BaseRetriever
 from app.knowledge.retriever.bm25 import BM25Retriever
-from app.knowledge.retriever.faiss import FAISSRetriever
 from app.shared.utils import wrrf_fusion
 
 logger = logging.getLogger(__name__)
 
 
 class HybridRetriever(BaseRetriever):
-    """Sparse + dense hybrid retriever with WRRF fusion.
+    """BM25 + dense (Milvus or FAISS) hybrid with WRRF fusion.
 
     Parameters:
-        documents: List of text strings shared by both sub-retrievers.
-        source: Source identifier (default ``"local_docs"``).
-        bm25_weight: Weight for BM25 results in WRRF (default 0.5).
-        faiss_weight: Weight for FAISS results in WRRF (default 0.5).
-        wrrf_k: Rank-decay constant for WRRF (default 60).
-        embedding_dim: Dimensionality for random embedding fallback.
-        model_name: Sentence-transformer model name for FAISS.
+        documents: Shared document texts.
+        source: Source identifier.
+        dense_backend: ``"milvus"`` (default, matching original SU7_RAG) or ``"faiss"``.
+        bm25_weight: BM25 weight in WRRF (default 0.7, matching original).
+        dense_weight: Dense weight in WRRF (default 0.7, matching original).
+        wrrf_k: WRRF rank-decay constant (default 60, matching original).
     """
 
     def __init__(
         self,
         documents: list[str],
         source: str = "local_docs",
-        bm25_weight: float = 0.5,
-        faiss_weight: float = 0.5,
+        dense_backend: str = "milvus",
+        bm25_weight: float = 0.7,
+        dense_weight: float = 0.7,
         wrrf_k: int = 60,
-        embedding_dim: int = 512,
-        model_name: str = "BAAI/bge-small-zh-v1.5",
     ) -> None:
         self._bm25 = BM25Retriever(documents, source=source)
-        self._faiss = FAISSRetriever(
-            documents,
-            source=source,
-            model_name=model_name,
-            embedding_dim=embedding_dim,
-        )
-        self._weights = [bm25_weight, faiss_weight]
+
+        if dense_backend == "milvus":
+            from app.knowledge.retriever.milvus import MilvusRetriever
+            self._dense: BaseRetriever = MilvusRetriever(documents, source=source)
+        elif dense_backend == "faiss":
+            from app.knowledge.retriever.faiss import FAISSRetriever
+            self._dense = FAISSRetriever(documents, source=source)
+        else:
+            raise ValueError(f"Unknown dense_backend: {dense_backend}")
+
+        self._weights = [bm25_weight, dense_weight]
         self._wrrf_k = wrrf_k
+        self._dense_backend = dense_backend
 
     # ------------------------------------------------------------------
     # BaseRetriever interface
     # ------------------------------------------------------------------
 
     def retrieve(self, query: str, top_k: int) -> list[RetrievedDoc]:
-        """Return up to *top_k* documents after WRRF fusion."""
         result = self.retrieve_with_metadata(query, top_k)
         return result.docs
 
-    # ------------------------------------------------------------------
-    # Extended API
-    # ------------------------------------------------------------------
-
     def retrieve_with_metadata(self, query: str, top_k: int) -> RetrieveResult:
-        """Return a :class:`RetrieveResult` that includes latency_ms."""
+        """BM25 + dense → WRRF fusion, matching original SU7_RAG flow."""
         t0 = time.perf_counter()
 
-        bm25_docs = self._bm25.retrieve(query, top_k=top_k * 2)
-        faiss_docs = self._faiss.retrieve(query, top_k=top_k * 2)
+        # BM25: top-k * 4 for broader recall (original used top-15 vs top-40 ratio)
+        bm25_docs = self._bm25.retrieve(query, top_k=max(top_k, 15))
+        dense_docs = self._dense.retrieve(query, top_k=max(top_k * 3, 40))
 
         fused = wrrf_fusion(
-            [bm25_docs, faiss_docs],
+            [bm25_docs, dense_docs],
             weights=self._weights,
             k=self._wrrf_k,
         )
-        fused = [doc for doc in fused if isinstance(doc, RetrievedDoc)]
+        fused = [d for d in fused if isinstance(d, RetrievedDoc)]
         fused = fused[:top_k]
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
         logger.debug(
-            "Hybrid retrieve: bm25=%d, faiss=%d, fused=%d, latency=%dms",
+            "Hybrid(%s): bm25=%d, dense=%d, fused=%d, latency=%dms",
+            self._dense_backend,
             len(bm25_docs),
-            len(faiss_docs),
+            len(dense_docs),
             len(fused),
             latency_ms,
         )

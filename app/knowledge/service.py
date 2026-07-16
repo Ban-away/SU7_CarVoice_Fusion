@@ -16,6 +16,7 @@ from app.knowledge.retriever.base import BaseRetriever
 from app.knowledge.retriever.bm25 import BM25Retriever
 from app.knowledge.retriever.faiss import FAISSRetriever
 from app.knowledge.retriever.hybrid import HybridRetriever
+from app.knowledge.retriever.milvus import MilvusRetriever
 from app.knowledge.reranker.base import BaseReranker
 from app.knowledge.reranker.minicpm import MiniCPMReranker
 from app.knowledge.synthesizer import CitationSynthesizer
@@ -260,8 +261,10 @@ class KnowledgeService:
             return BM25Retriever(texts)
         elif self._retriever_backend == "faiss":
             return FAISSRetriever(texts)
+        elif self._retriever_backend == "milvus":
+            return MilvusRetriever(texts)
         elif self._retriever_backend == "hybrid":
-            return HybridRetriever(texts)
+            return HybridRetriever(texts, dense_backend=settings.hybrid_dense_backend)
         else:
             # mock: use a simple BM25 which degrades to TF scoring
             logger.info("Retriever backend '%s' -> using BM25 as fallback", self._retriever_backend)

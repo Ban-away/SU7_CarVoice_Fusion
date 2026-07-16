@@ -45,10 +45,10 @@ class Settings:
     knowledge_top_k: int = int(os.getenv("KNOWLEDGE_TOP_K", "3"))
     web_search_enabled: bool = _to_bool(os.getenv("WEB_SEARCH_ENABLED"), False)
     knowledge_docs_path: str = os.getenv("KNOWLEDGE_DOCS_PATH", "data/knowledge/su7_docs.json")
-    retriever_backend: str = os.getenv("RETRIEVER_BACKEND", "mock")  # mock | bm25 | faiss | milvus
+    retriever_backend: str = os.getenv("RETRIEVER_BACKEND", "mock")  # mock | bm25 | milvus | hybrid
     reranker_backend: str = os.getenv("RERANKER_BACKEND", "mock")   # mock | minicpm
-    milvus_host: str = os.getenv("MILVUS_HOST", "127.0.0.1")
-    milvus_port: int = int(os.getenv("MILVUS_PORT", "19530"))
+    hybrid_dense_backend: str = os.getenv("HYBRID_DENSE_BACKEND", "milvus")  # milvus | faiss
+    milvus_uri: str = os.getenv("MILVUS_URI", "data/knowledge/saved_index/milvus.db")
 
     # ---- MCP ----
     amap_api_key: str = os.getenv("AMAP_API_KEY", "")

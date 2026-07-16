@@ -2,6 +2,270 @@
 
 基于 **CarVoice_Agent**（实时会话与任务路由）与 **XIAOMI_SU7_RAG**（知识检索与可溯源回答）的完整融合后端。
 
+---
+
+## 快速开始
+
+### 方式一：Mock 模式（本地零依赖，30 秒启动）
+
+无需 GPU、无需 API Key、无需外部服务，开箱即验证全部逻辑链路：
+
+```bash
+# 1. 克隆
+git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
+cd SU7_CarVoice_Fusion
+
+# 2. 虚拟环境
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+# 3. 安装依赖（仅基础包，无需 CUDA）
+pip install -r requirements.txt
+
+# 4. 配置
+cp .env.example .env
+
+# 5. 启动
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
+```
+
+验证：
+
+```bash
+curl http://127.0.0.1:8080/healthz              # → {"status":"ok"}
+
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"请导航到公司"}'                  # → task_result
+
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"SU7 续航是多少"}'                # → faq_answer + citations
+```
+
+---
+
+### 方式二：AutoDL 云 GPU 完整部署
+
+以下为在 [AutoDL](https://www.autodl.com) 租用 GPU 实例从头到尾跑通全部能力的完整流程。
+
+#### 硬件选择
+
+| 用途 | GPU 建议 | 参考机型 |
+|------|---------|---------|
+| Mock 验证 / API 调试 | 最低配 | RTX 3060 |
+| RAG 检索 + vLLM 推理 | 24GB+ | RTX 3090 / 4090 |
+| Qwen3-8B LoRA 训练 | 24GB+ | RTX 3090 / 4090 |
+| Qwen3-8B 全量训练 / GRPO | 40GB+ | A100 |
+
+镜像选择：**PyTorch 2.x + CUDA 12.x + Python 3.10/3.11**
+
+#### 第一步：环境初始化
+
+```bash
+# 克隆仓库
+git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
+cd SU7_CarVoice_Fusion
+
+# 创建虚拟环境
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+
+# 核心依赖
+pip install -r requirements.txt
+
+# RAG 检索依赖
+pip install rank-bm25 jieba sentence-transformers faiss-gpu
+
+# Milvus 混合检索（原始技术栈）
+pip install pymilvus transformers torch
+
+# vLLM 推理
+pip install vllm
+
+# 训练依赖
+pip install datasets accelerate peft bitsandbytes
+
+# MCP 协议（高德地图 / QQ 音乐）
+pip install mcp fastmcp
+
+# HuggingFace 国内镜像（必设）
+export HF_ENDPOINT=https://hf-mirror.com
+
+# 下载模型（~20GB，首次运行必需）
+#   core — Agent + RAG 核心模型（默认）
+#   all  — 含备选重排器
+python scripts/download_models.py --preset core
+
+# 配置
+cp .env.example .env
+vim .env    # 按需修改，Mock 模式可跳过
+```
+
+#### 第二步：构建知识库索引
+
+> 对应 XIAOMI_SU7_RAG 的 `build_index.py` 流程。
+
+```bash
+# 创建必要目录
+mkdir -p data/knowledge/{processed_docs,saved_index/faiss.db,saved_images}
+mkdir -p data/training/{qa_pairs,rerank,summary,rl,benchmark}
+mkdir -p log models
+
+# 解析 PDF → 清洗 → 语义分块 → 构建索引
+python -c "
+from app.knowledge.parser.pdf_parser import PDFParser
+from app.knowledge.chunker import SemanticChunker
+from app.knowledge.retriever.bm25 import BM25Retriever
+from app.knowledge.retriever.faiss import FAISSRetriever
+import pickle
+
+# 1. 解析 PDF
+parser = PDFParser()
+pages = parser.parse('data/knowledge/Xiaomi_SU7_Manual.pdf')
+print(f'PDF 解析完成: {len(pages)} 页')
+
+# 2. 语义分块
+chunker = SemanticChunker(chunk_size=512, chunk_overlap=50)
+chunks = chunker.split([p['text'] for p in pages if p.get('text')])
+print(f'分块完成: {len(chunks)} 个块')
+
+# 3. 构建 BM25 索引
+bm25 = BM25Retriever(chunks)
+with open('data/knowledge/saved_index/bm25retriever.pkl', 'wb') as f:
+    pickle.dump(bm25, f)
+print('BM25 索引保存完成')
+
+# 4. 构建 FAISS 索引
+faiss = FAISSRetriever(chunks)
+faiss.save('data/knowledge/saved_index/faiss.db')
+print('FAISS 索引保存完成')
+"
+```
+
+> **注意**：项目已附带预构建索引（`data/knowledge/saved_index/`），如果已存在可跳过此步骤。Milvus 索引也需要构建（需 GPU）：
+>
+> ```bash
+> # 构建 Milvus 混合索引（BGE-Large-zh-v1.5 + SPLADE v2）
+> python -c "
+> from app.knowledge.retriever.milvus import MilvusRetriever
+> import json
+> with open('data/knowledge/su7_docs.json') as f:
+>     docs = [item['content'] for item in json.load(f)]
+> retriever = MilvusRetriever(docs)
+> print(f'Milvus 索引构建完成')
+> "
+> ```
+
+#### 第三步：生成 QA 训练数据
+
+> 对应 XIAOMI_SU7_RAG 的 `generate_all_data.py` + `generate_sft_data.py` 流程。
+
+```bash
+python -c "
+from app.data_pipeline.qa_generator import generate_qa_pairs
+from app.data_pipeline.qa_filter import filter_qa_pairs
+from app.data_pipeline.dataset_builder import build_summary_dataset, build_rerank_dataset
+from app.knowledge.service import KnowledgeService
+import json
+
+# 1. 生成 QA 对（需 Doubao API 或 Mock）
+ks = KnowledgeService()
+docs = [d.content for d in ks._documents]
+qa_pairs = generate_qa_pairs(docs)
+print(f'生成 QA 对: {len(qa_pairs)} 条')
+
+# 2. 质量过滤
+clean_pairs = filter_qa_pairs(qa_pairs)
+print(f'过滤后保留: {len(clean_pairs)} 条')
+
+# 3. 构建训练数据集
+build_summary_dataset(clean_pairs, output_dir='data/training/summary')
+print('Summary 数据集构建完成')
+"
+```
+
+> **注意**：完整 QA 生成需要配置 Doubao API Key（`DOUBAO_API_KEY`）。项目已附带预生成的 QA 数据和训练集（`data/training/qa_pairs/`、`data/training/summary/`、`data/training/rerank/`），如果已存在可跳过此步骤。
+
+#### 第四步：模型训练
+
+> 对应 XIAOMI_SU7_RAG 的 LLaMA-Factory SFT + GRPO 流程。
+
+```bash
+# SFT 微调（需 LLaMA-Factory）
+cd LLaMA-Factory-main 2>/dev/null || (
+    git clone https://github.com/hiyouga/LLaMA-Factory.git LLaMA-Factory-main
+    cd LLaMA-Factory-main
+    pip install -r requirements.txt
+    pip install -e .
+)
+
+# 复制训练数据
+cp ../data/training/summary/train.json data/summary_train.json
+cp ../data/training/summary/test.json data/summary_test.json
+
+# 启动 SFT 训练
+llamafactory-cli train ../configs/sft.yaml
+
+# 导出合并模型
+llamafactory-cli export ../configs/sft.yaml
+
+# （可选）GRPO 强化学习训练
+# llamafactory-cli train ../configs/grpo.yaml
+```
+
+#### 第五步：启动完整服务
+
+```bash
+# 终端 1：启动 vLLM 推理服务
+vllm serve Qwen/Qwen3-8B \
+    --host 0.0.0.0 --port 8000 \
+    --max-model-len 4096 \
+    --gpu-memory-utilization 0.90
+
+# 终端 2：启动融合服务
+source .venv/bin/activate
+cp .env.example .env
+# 编辑 .env: LLM_PROVIDER=vllm, RETRIEVER_BACKEND=hybrid
+uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
+#### 第六步：验证全链路
+
+```bash
+# 健康检查
+curl http://127.0.0.1:8080/healthz
+
+# Task 路径（技能执行）
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"请导航到公司"}'
+
+# FAQ 路径（RAG 检索 + 引用）
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"SU7 续航是多少"}'
+
+# Chitchat 路径（闲聊）
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"你好"}'
+
+# 技能白名单
+curl http://127.0.0.1:8080/api/v1/skills
+
+# 函数定义（455 个）
+curl http://127.0.0.1:8080/api/v1/functions
+
+# 知识检索调试
+curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query":"SU7 电池容量","top_k":3}'
+```
+
+---
+
 ## 架构说明
 
 ```
@@ -9,344 +273,104 @@ api/              统一入口（HTTP + WebSocket）
 core/             主控编排（分类、路由、会话）
 nlp/              NLP 管道（仲裁、改写、NLU、NLG、拒识、关联）
 skills/           技能执行（455 函数定义 + 白名单 + 槽位处理 + DM）
-knowledge/        知识 RAG（BM25/FAISS/Hybrid 检索 + MiniCPM 重排 + LLM 生成）
-llm/              LLM 抽象层（Mock / Doubao / vLLM / OpenAI）
-mcp/              MCP 基础设施（客户端 + 高德地图13工具 + QQ音乐）
-prompts/          系统提示词（仲裁/改写/NLG/NLU/闲聊/关联）
-data_pipeline/    数据管道（QA生成/过滤/缩写扩展/数据集构建）
-eval/             评估框架（自定义评分 + RAGas）
+knowledge/        知识 RAG（BM25/Milvus/Hybrid 检索 + MiniCPM 重排 + LLM 生成）
+llm/              LLM 抽象层（Doubao / vLLM / OpenAI / Mock）
+mcp/              MCP 基础设施（高德地图 13 工具 + QQ 音乐）
+prompts/          系统提示词（7 个，逐字移植自 CarVoice_Agent）
+data_pipeline/    数据管道（QA 生成 / 过滤 / 缩写扩展 / 训练集构建）
+eval/             评估框架（语义 + 关键词加权 + RAGas）
 shared/           共享层（schema、配置、日志、Redis、WRRF 融合算法）
 ```
 
----
+### 请求处理流程
 
-## 本地快速启动（零依赖 Mock 模式）
+```
+用户输入
+  │
+  ├─ rewrite_with_context (多轮指代消解)
+  │
+  ├─ classify_intent (关键词 + LLM 仲裁双通道)
+  │
+  ├─ Task  → resolve_skill → execute → NLG → task_result
+  ├─ FAQ   → reject+correlation → knowledge.retrieve → synthesize → faq_answer + citations
+  ├─ Chitchat → reject+correlation → LLM chat → chitchat
+  └─ Unknown  → clarification
+```
 
-默认 `LLM_PROVIDER=mock`，无需 GPU，无需外部 API Key，开箱即运行：
+### 技术栈
+
+| 层 | 组件 | 来源 |
+|---|------|------|
+| 检索 | BM25 + Milvus (BGE+SPLADE) → WRRF 融合 → MiniCPM 重排 | XIAOMI_SU7_RAG |
+| 生成 | vLLM / Doubao / OpenAI | 两者 |
+| 仲裁 | 182 行仲裁 prompt，Doubao LLM | CarVoice_Agent |
+| NLU | 外部 NLU 服务 + 455 函数定义 + 槽位归一化 | CarVoice_Agent |
+| 改写 | LLM 指代消解 + 字符重叠安全校验 | CarVoice_Agent |
+| 拒识 | 外部拒识服务 + 多轮关联判断 | CarVoice_Agent |
+| 会话 | Redis（内存回退）| CarVoice_Agent |
+| MCP | 高德地图 13 工具 + QQ 音乐 | CarVoice_Agent |
+
+### 配置驱动
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
-cd SU7_CarVoice_Fusion
-
-# 2. 创建虚拟环境
-python -m venv .venv
-source .venv/bin/activate
-
-# 3. 安装依赖（仅基础依赖，Mock 模式不需要 GPU 库）
-pip install -r requirements.txt
-
-# 4. 准备配置
-cp .env.example .env
-
-# 5. 启动服务
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+LLM_PROVIDER=mock      # mock | doubao | vllm | openai
+RETRIEVER_BACKEND=mock  # mock | bm25 | milvus | hybrid
+RERANKER_BACKEND=mock   # mock | minicpm
+HYBRID_DENSE_BACKEND=milvus  # milvus | faiss
 ```
 
 ---
 
-## AutoDL 云 GPU 部署指南
+## 配置项
 
-以下为在 [AutoDL](https://www.autodl.com) 租用 GPU 实例的完整部署流程。
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `LLM_PROVIDER` | LLM 后端 | mock |
+| `DOUBAO_API_KEY` | 豆包 API Key（CarVoice 原始技术栈） | 空 |
+| `VLLM_BASE_URL` | vLLM 推理地址 | http://127.0.0.1:8000/v1 |
+| `RETRIEVER_BACKEND` | 检索后端：mock / bm25 / milvus / hybrid | mock |
+| `RERANKER_BACKEND` | 重排后端：mock / minicpm | mock |
+| `HYBRID_DENSE_BACKEND` | hybrid 模式的向量后端：milvus / faiss | milvus |
+| `MILVUS_URI` | Milvus Lite 数据库路径 | data/knowledge/saved_index/milvus.db |
+| `REDIS_URL` | Redis 连接（无则内存存储） | 空 |
+| `NLU_URL` | NLU 服务地址（CarVoice 原始技术栈） | 空 |
+| `REJECT_URL` | 拒识服务地址 | 空 |
+| `AMAP_API_KEY` | 高德地图 API Key | 空 |
+| `TASK_CONFIDENCE_THRESHOLD` | Task 置信度阈值 | 0.75 |
+| `FAQ_CONFIDENCE_THRESHOLD` | FAQ 置信度阈值 | 0.65 |
 
-### 1. 租用实例建议
-
-| 用途 | GPU 建议 | 显存 | 参考机型 |
-|------|---------|------|---------|
-| Mock 模式 / API 调试 | 最低配 | 任意 | RTX 3060 / 2080Ti |
-| vLLM + RAG 检索 | 24GB+ | RTX 3090 / 4090 / A5000 |
-| Qwen3-8B 训练 (LoRA) | 24GB+ | RTX 3090 / 4090 / A5000 |
-| Qwen3-8B 训练 (全量) | 40GB+ | A100 / 2×RTX 3090 |
-
-镜像建议：**PyTorch 2.x + CUDA 12.x + Python 3.10/3.11**
-
-### 2. 环境初始化
-
-```bash
-# ========== 登录 AutoDL 后，打开终端 ==========
-
-# 克隆仓库
-git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
-cd SU7_CarVoice_Fusion
-
-# 创建虚拟环境（AutoDL 通常已有 conda）
-python -m venv .venv
-source .venv/bin/activate
-
-# 升级 pip
-pip install --upgrade pip
-
-# ========== 安装核心依赖 ==========
-pip install -r requirements.txt
-
-# ========== Mock 模式验证（无需 GPU 库，先确认基础可用）==========
-cp .env.example .env
-python -c "from app.main import app; print('OK')"
-# 输出 OK 即可
-
-# ========== 安装 RAG 检索依赖（生产模式）==========
-pip install rank-bm25 jieba
-pip install sentence-transformers
-pip install faiss-cpu    # 或 faiss-gpu（CUDA 版）
-
-# ========== 安装 LLM 推理依赖（使用 vLLM 时）==========
-pip install vllm
-pip install transformers
-
-# ========== 安装数据库依赖（可选）==========
-pip install redis pymongo
-
-# ========== 安装 MCP 协议依赖（使用高德地图/QQ音乐时）==========
-pip install mcp fastmcp
-```
-
-### 3. 配置环境变量
-
-```bash
-cp .env.example .env
-vim .env    # 或 nano .env
-```
-
-**AutoDL 上建议配置：**
-
-```bash
-# LLM — 使用本地 vLLM（AutoDL 有 GPU）
-LLM_PROVIDER=vllm
-VLLM_BASE_URL=http://127.0.0.1:8000/v1
-
-# 检索后端 — 使用 BM25（无需额外服务）或 Hybrid（BM25+FAISS）
-RETRIEVER_BACKEND=bm25        # bm25 | faiss | hybrid
-RERANKER_BACKEND=mock          # 改为 minicpm 以获得更好效果
-
-# 知识库文档路径（指向小米 SU7 手册 PDF）
-KNOWLEDGE_DOCS_PATH=data/knowledge/Xiaomi_SU7_Manual.pdf
-
-# 以下按需填写：
-# DOUBAO_API_KEY=sk-xxx       # 如果使用豆包 API
-# AMAP_API_KEY=xxx            # 如果使用高德地图
-# REDIS_URL=redis://127.0.0.1:6379/0
-```
-
-### 4. 构建知识库索引
-
-如果使用 BM25/FAISS 检索，先构建索引：
-
-```bash
-# 解析 PDF → 清洗 → 分块 → 构建索引
-python -c "
-from app.knowledge.parser.pdf_parser import PDFParser
-from app.knowledge.chunker import SemanticChunker
-from app.knowledge.retriever.bm25 import BM25Retriever
-from app.knowledge.retriever.faiss import FAISSRetriever
-from app.knowledge.retriever.hybrid import HybridRetriever
-import pickle
-
-# 1. 解析 PDF
-parser = PDFParser()
-pages = parser.parse('data/knowledge/Xiaomi_SU7_Manual.pdf')
-print(f'Parsed {len(pages)} pages')
-
-# 2. 语义分块
-chunker = SemanticChunker(chunk_size=512, chunk_overlap=50)
-chunks = chunker.split([p['text'] for p in pages if p.get('text')])
-print(f'Created {len(chunks)} chunks')
-
-# 3. 构建 BM25 索引
-bm25 = BM25Retriever(chunks)
-with open('data/knowledge/saved_index/bm25retriever.pkl', 'wb') as f:
-    pickle.dump(bm25, f)
-print('BM25 index saved')
-
-# 4. 构建 FAISS 索引
-faiss = FAISSRetriever(chunks)
-faiss.save('data/knowledge/saved_index/faiss.db')
-print('FAISS index saved')
-"
-```
-
-### 5. 启动 vLLM 推理服务（使用 LLM 能力时）
-
-```bash
-# 在一个终端启动 vLLM（Qwen3-8B 为例）
-# 24GB 显存可跑 4-bit 量化版
-vllm serve Qwen/Qwen3-8B \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --max-model-len 4096 \
-    --gpu-memory-utilization 0.90
-
-# 等待模型加载完成（看到 "Uvicorn running on http://0.0.0.0:8000" 即可）
-```
-
-### 6. 启动融合服务
-
-```bash
-# 在另一个终端
-cd SU7_CarVoice_Fusion
-source .venv/bin/activate
-uvicorn app.main:app --host 0.0.0.0 --port 8080
-```
-
-### 7. 验证服务
-
-```bash
-# 健康检查
-curl http://127.0.0.1:8080/healthz
-
-# Task 请求
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"请导航到公司"}'
-
-# FAQ 请求（RAG 检索 + LLM 生成）
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"SU7 续航是多少"}'
-
-# 查看已注册的 455 个函数定义
-curl http://127.0.0.1:8080/api/v1/functions
-
-# 查看 7 个技能白名单
-curl http://127.0.0.1:8080/api/v1/skills
-
-# 直接用知识检索接口（不经过路由）
-curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query":"SU7 电池容量","top_k":3}'
-```
-
-### 8. 外网访问（AutoDL 自定义服务）
-
-AutoDL 支持通过 SSH 隧道或自定义服务端口暴露：
-
-```bash
-# 方法 1：AutoDL 自定义服务（推荐）
-# 在 AutoDL 控制台 → 实例 → 自定义服务 → 添加端口 8080
-# 然后通过 AutoDL 提供的公网 URL 访问
-
-# 方法 2：SSH 隧道（本地调试时）
-# 在本地电脑执行：
-ssh -L 8080:127.0.0.1:8080 -p <SSH端口> root@<AutoDL_IP>
-# 然后本地访问 http://127.0.0.1:8080
-```
+完整配置见 `.env.example`。
 
 ---
 
-## AutoDL 一行启动脚本
+## HTTP 接口
 
-将以下内容保存为 `scripts/autodl_start.sh`，在 AutoDL 上执行：
+### `GET /healthz`
+健康检查。
 
-```bash
-#!/bin/bash
-set -e
-cd SU7_CarVoice_Fusion
-source .venv/bin/activate
-cp -n .env.example .env 2>/dev/null || true
-
-# 启动 vLLM（后台）
-vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
-    --max-model-len 4096 --gpu-memory-utilization 0.90 &
-sleep 30  # 等待模型加载
-
-# 启动融合服务
-uvicorn app.main:app --host 0.0.0.0 --port 8080
-```
-
----
-
-## HTTP 测试示例
-
-### 健康检查
-
-```bash
-curl http://127.0.0.1:8080/healthz
-```
-
-### Task 路径
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"请导航到公司"}'
-```
-
-返回示例：
+### `POST /api/v1/chat`
+单轮请求响应。
 
 ```json
-{
-  "type": "task_result",
-  "text": "已开始导航到公司。",
-  "citations": [],
-  "trace": {
-    "route": "Task",
-    "classifier_confidence": 0.9,
-    "knowledge_hit_count": null,
-    "latency_ms": 1,
-    "fallback_reason": null,
-    "risk_level": "medium"
-  }
-}
+{"message":"请导航到公司"}
 ```
 
-### FAQ 路径（含 citations）
+返回：`type` ∈ {task_result, faq_answer, chitchat, clarification, error}，含 `citations[].source` + `citations[].page` 和 `trace`。
 
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"SU7 续航是多少"}'
-```
+### `GET /api/v1/skills`
+已注册的技能白名单（7 个），含 risk_level + category + keywords。
 
-返回示例（含引用）：
+### `GET /api/v1/functions`
+全部 455 个函数/工具定义。
+
+### `POST /api/v1/knowledge/retrieve`
+知识检索调试接口。
 
 ```json
-{
-  "type": "faq_answer",
-  "text": "小米 SU7 标准版 CLTC 续航约 700km。",
-  "citations": [
-    {"source": "su7_manual.pdf", "page": 12}
-  ],
-  "trace": {
-    "route": "FAQ",
-    "classifier_confidence": 0.82,
-    "knowledge_hit_count": 1,
-    "latency_ms": 1,
-    "fallback_reason": null,
-    "risk_level": null
-  }
-}
+{"query":"SU7 续航","top_k":3}
 ```
 
-### Unknown 路径（澄清）
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"asdfghjkl"}'
-```
-
-### 技能白名单元数据
-
-```bash
-curl http://127.0.0.1:8080/api/v1/skills
-```
-
-### 函数定义（455个）
-
-```bash
-curl http://127.0.0.1:8080/api/v1/functions
-```
-
-### 知识检索调试
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query":"SU7 续航","top_k":2}'
-```
-
----
-
-## WebSocket 测试
+## WebSocket
 
 连接地址：`ws://127.0.0.1:8080/ws/chat`
 
@@ -356,7 +380,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
 {"message":"请播放音乐"}
 ```
 
-高风险确认样例（同一 session）：
+高风险技能需二次确认：
 
 ```json
 {"message":"请关闭安全系统"}
@@ -365,35 +389,16 @@ curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
 
 ---
 
-## 配置项
-
-见 `.env.example`：
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `LLM_PROVIDER` | LLM 后端：mock / doubao / vllm / openai | mock |
-| `RETRIEVER_BACKEND` | 检索后端：mock / bm25 / faiss / hybrid | mock |
-| `RERANKER_BACKEND` | 重排后端：mock / minicpm | mock |
-| `WEB_SEARCH_ENABLED` | 是否启用 Web 搜索 | false |
-| `TASK_CONFIDENCE_THRESHOLD` | Task 路由置信度阈值 | 0.75 |
-| `FAQ_CONFIDENCE_THRESHOLD` | FAQ 路由置信度阈值 | 0.65 |
-| `CHITCHAT_CONFIDENCE_THRESHOLD` | Chitchat 路由置信度阈值 | 0.60 |
-| `REDIS_URL` | Redis 连接串（可选，无则内存存储） | 空 |
-| `AMAP_API_KEY` | 高德地图 API Key（MCP 地图工具需要） | 空 |
-| `DOUBAO_API_KEY` | 豆包 API Key（使用 Doubao LLM 时） | 空 |
-
----
-
 ## 测试
 
 ```bash
 pytest -q -v
-# 61 tests passed
+# 63 tests passed
 ```
 
 ---
 
-## Docker Compose
+## Docker
 
 ```bash
 docker compose up --build
@@ -409,71 +414,59 @@ SU7_CarVoice_Fusion/
 │   ├── main.py                       # FastAPI 入口
 │   ├── api/                          # HTTP + WebSocket 网关
 │   ├── core/                         # 主控编排
-│   │   ├── orchestrator.py           # 中央调度
+│   │   ├── orchestrator.py           # 中央调度（对应 CarVoice dialog.py）
 │   │   ├── classifier.py             # 意图分类
 │   │   └── session.py                # 会话管理
 │   ├── nlp/                          # NLP 管道
-│   │   ├── arbitration.py            # LLM 仲裁（A/B/C/D四分类）
+│   │   ├── arbitration.py            # 仲裁（A/B/C/D → task/faq/chat）
 │   │   ├── rewrite.py                # 查询改写（指代消解）
 │   │   ├── nlu.py                    # NLU 意图槽位提取
-│   │   ├── nlg.py                    # NLG 工具响应转自然语言
+│   │   ├── nlg.py                    # NLG 自然语言生成
 │   │   ├── reject.py                 # 拒识模型
 │   │   └── correlation.py            # 多轮关联判断
 │   ├── skills/                       # 技能执行
-│   │   ├── definitions.py            # 455 函数定义（来自 CarVoice_Agent）
+│   │   ├── definitions.py            # 455 函数定义（对应 CarVoice function.py）
 │   │   ├── registry.py               # 白名单注册表
-│   │   ├── nlu_data.py               # NLU 数据加载器
+│   │   ├── nlu_data.py               # NLU 数据加载
 │   │   ├── slot_processor.py         # 槽位归一化
 │   │   └── dm/                       # DM 处理器（maps/music/weather）
-│   ├── knowledge/                    # 知识 RAG
-│   │   ├── retriever/                # BM25 / FAISS / Hybrid 检索器
+│   ├── knowledge/                    # 知识 RAG（对应 XIAOMI_SU7_RAG src/）
+│   │   ├── retriever/                # BM25 / FAISS / Milvus / Hybrid 检索器
 │   │   ├── reranker/                 # MiniCPM 重排序
-│   │   ├── generator.py              # LLM 答案生成
-│   │   ├── synthesizer.py            # 引用拼装
+│   │   ├── generator.py              # LLM 答案生成（对应 llm_local_client）
+│   │   ├── synthesizer.py            # 引用拼装（对应 post_processing）
 │   │   ├── chunker.py                # 语义分块
-│   │   └── parser/                   # PDF 解析
-│   ├── llm/                          # LLM 客户端
-│   │   ├── base.py                   # 抽象基类 + 工厂
-│   │   ├── mock.py                   # Mock 客户端
-│   │   ├── doubao.py                 # 豆包（字节）客户端
-│   │   └── vllm.py                   # vLLM 客户端
+│   │   └── parser/pdf_parser.py     # PDF 解析
+│   ├── llm/                          # LLM 抽象层
+│   │   ├── doubao.py                 # Doubao（CarVoice 原始技术栈）
+│   │   ├── vllm.py                   # vLLM（SU7_RAG 原始技术栈）
+│   │   └── mock.py                   # Mock（本地开发）
 │   ├── mcp/                          # MCP 协议
 │   │   ├── client.py                 # MCP 客户端
 │   │   ├── amap_server.py            # 高德地图（13 工具）
 │   │   └── music_server.py           # QQ 音乐
-│   ├── prompts/                      # 系统提示词库
+│   ├── prompts/                      # 7 个 System Prompt
 │   ├── data_pipeline/                # 数据管道
 │   │   ├── qa_generator.py           # QA 对生成
 │   │   ├── qa_filter.py              # 质量过滤
 │   │   ├── abbr_expander.py          # 缩写扩展
 │   │   └── dataset_builder.py        # 训练集构建
 │   ├── eval/                         # 评估框架
-│   │   ├── scorer.py                 # 自定义评分
+│   │   ├── scorer.py                 # 语义 + 关键词加权
 │   │   └── ragas_eval.py             # RAGas 评估
 │   └── shared/                       # 共享层
-│       ├── schemas.py                # Pydantic 模型
-│       ├── config.py                 # 配置
+│       ├── schemas.py / config.py / logging.py
 │       ├── redis_client.py           # Redis（内存回退）
 │       └── utils.py                  # WRRF 融合算法
 ├── configs/                          # 训练配置
-│   ├── sft.yaml                      # SFT 训练
-│   ├── grpo.yaml                     # GRPO RL 训练
-│   ├── original_grpo.yaml            # 原始 GRPO 配置（参考）
-│   └── original_sft.yaml             # 原始 SFT 配置（参考）
 ├── data/
-│   ├── knowledge/
-│   │   ├── Xiaomi_SU7_Manual.pdf     # 小米 SU7 用户手册（20MB）
-│   │   ├── su7_docs.json             # 知识库文档
-│   │   ├── processed_docs/           # 预处理文档缓存（pkl）
-│   │   └── saved_index/              # 预构建检索索引（BM25/FAISS）
-│   ├── nlu/                          # NLU 数据（slot_intent + intent_map + class_labels）
-│   ├── training/                     # 训练数据（intent/reject/闲聊/QA对）
-│   └── abbr/abbr_ch.csv              # 汽车术语缩写表（48条）
-├── tests/                            # 61 个测试用例
-├── docs/architecture.md              # 架构文档
-├── scripts/                          # 启动脚本
-│   ├── start.sh                      # Linux/Mac
-│   └── start.ps1                     # Windows
+│   ├── knowledge/                    # PDF + 文档 + 索引 + 图片
+│   ├── nlu/                          # slot_intent + intent_map + class_labels
+│   ├── training/                     # QA / rerank / summary / RL 数据集
+│   └── abbr/                         # 汽车术语缩写表
+├── tests/                            # 63 个测试用例
+├── scripts/                          # 启动脚本（含 autodl_start.sh）
+├── docs/architecture.md
 ├── docker-compose.yml
 ├── Dockerfile
 └── requirements.txt

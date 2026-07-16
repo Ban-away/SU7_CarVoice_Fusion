@@ -131,14 +131,14 @@ class ChatOrchestrator:
                         ),
                         session_id=session.session_id,
                     )
-            return self._clarification(
-                route="Task", confidence=classification.confidence,
-                fallback_reason="skill_not_found", start_time=start_time,
-                session_id=session.session_id, rewritten_query=rewritten,
-            )
+            # ── Skill + NLU both failed → fallback to chat (matching CarVoice original) ──
+            logger.info("Task skill not found, falling back to chat")
+            return self._handle_chitchat(rewritten, message, classification, session, start_time)
 
-        # High-risk check
-        if skill.risk_level == "high" and not self.sessions.consume_pending_confirmation(session.session_id):
+        # High-risk check — always requires explicit confirm (never auto-execute)
+        if skill.risk_level == "high":
+            # Only execute if THIS request has confirm=true (handled at top of handle())
+            # Otherwise always ask for confirmation
             self.sessions.set_pending_confirmation(session.session_id, skill.name, rewritten)
             return self._clarification(
                 route="Task", confidence=classification.confidence,
@@ -163,6 +163,14 @@ class ChatOrchestrator:
         )
 
     def _handle_faq(self, rewritten, message, classification, session, start_time):
+        # ── Reject check (per CarVoice original) ──
+        if self._should_reject_question(rewritten, session.session_id):
+            return self._clarification(
+                route="FAQ", confidence=classification.confidence,
+                fallback_reason="rejected_by_model", start_time=start_time,
+                session_id=session.session_id, rewritten_query=rewritten,
+            )
+
         docs = self.knowledge_service.retrieve(rewritten, top_k=self.settings.knowledge_top_k)
         if not docs:
             return self._clarification(
@@ -185,6 +193,14 @@ class ChatOrchestrator:
         )
 
     def _handle_chitchat(self, rewritten, message, classification, session, start_time):
+        # ── Reject check (per CarVoice original) ──
+        if self._should_reject_question(rewritten, session.session_id):
+            return self._clarification(
+                route="Chitchat", confidence=classification.confidence,
+                fallback_reason="rejected_by_model", start_time=start_time,
+                session_id=session.session_id, rewritten_query=rewritten,
+            )
+
         self.sessions.append_history(session.session_id, message)
         # Optionally use LLM chat
         chat_text = self._maybe_chat(rewritten, session.session_id)
@@ -197,6 +213,40 @@ class ChatOrchestrator:
             ),
             session_id=session.session_id,
         )
+
+    def _should_reject_question(self, query: str, session_id: str) -> bool:
+        """Check reject model + correlation, matching CarVoice original flow.
+
+        Returns True if the question should be rejected:
+        1. Ask reject model
+        2. If not rejected → accept (return False)
+        3. If rejected → check correlation with previous query
+        4. If correlated → still accept (return False)
+        5. If not correlated → reject (return True)
+        """
+        try:
+            from app.nlp.reject import should_reject
+            from app.nlp.correlation import check_correlation
+
+            rejected = should_reject(query)
+            if not rejected:
+                return False
+
+            # Rejected — but check if correlated with previous
+            previous = self.sessions.get_last_user_message(session_id)
+            if previous:
+                correlated = check_correlation(
+                    query, session_id, previous_query=previous, was_rejected=True
+                )
+                if correlated:
+                    logger.info("Query rejected but correlated with previous — accepting")
+                    return False
+
+            logger.info("Query rejected and not correlated — blocking")
+            return True
+        except Exception:
+            logger.exception("Reject check failed — defaulting to accept")
+            return False
 
     # ------------------------------------------------------------------
     # Helpers

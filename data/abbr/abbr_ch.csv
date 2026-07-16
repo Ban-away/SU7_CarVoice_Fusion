@@ -1,50 +1,53 @@
-ECU,电子控制单元,Electronic Control Unit
+﻿ECU,电子控制单元,Electronic Control Unit
+BCM,车身控制模块,Body Control Module
+RKE,遥控门禁系统,Remote Keyless Entry
 PEPS,无钥匙进入和无钥匙启动,Passive Entry Passive Start
+HSU,手柄开关单元,Handle Switch Unit
+PSU,接近传感器单元,Proximity Senor Unit
+ESCL,电子转向柱锁,Electronic Steering Column Lock
+LF/HF,低频/高频,Low Frequency/High Frequency
+RSSI,接收的信号强度提示,Received Signal Strength Indication
+CID,智能车钥匙,Customer Identification Device
+PLG,电动尾门系统,Power Lift Gate System
+SSB,电源开关按钮,Start/Stop Button
+AT,自动挡,Automatic Transmission
+MT,手动挡,Manual Transmission
+N,空挡,Neutral
+P,驻车挡,Parking
+R,倒车挡,Reverse
+D,前进挡,Drive
+IG,点火,Ignition
+ACC,附件(娱乐设备供电),Accessory
+AUTOSAR,汽车开放系统架构,AUTOmotive Open System Architecture
+CAN,CAN总线(控制器区域网络),Controller Area Network
+RF,无线电频率,Radio Frequency
+IMMO,发动机防盗锁止系统,Immobilizer
+TX,发射器,Transmitter
+RX,接收器,Receiver
+NXP,恩智浦半导体,TBD
+Renesas Electronic,瑞萨电子,TBD
+ST Microelectronic,意法半导体,TBD
+ON Semiconductor,安森美半导体,TBD
+Infineon,英飞凌,TBD
+SBC,系统基础芯片,System Basic Chip
+ASIC,专设集成电路,Application Specific Integrated Circuit
 TPMS,轮胎压力监测系统,Tire Pressure Monitoring System
+IDE,识别码,Identifier
+OEM,原始设备制造商,Original Equipment Manufacturer
+CEM,合约设备制造商,Contract Equipment Manufacturer
+RSK,远程密钥,Remote Secret Key
+EMS,发动机管理系统,Engine Management System
 EPB,电子驻车制动系统,Electrical Parking Brake
-V2X,车联网通信,Vehicle to Everything
-ABS,防抱死制动系统,Anti-lock Braking System
-ESP,电子稳定程序,Electronic Stability Program
-ACC,自适应巡航控制,Adaptive Cruise Control
-LKA,车道保持辅助,Lane Keeping Assist
-AEB,自动紧急制动,Autonomous Emergency Braking
-HUD,抬头显示,Head-Up Display
-DMS,驾驶员监测系统,Driver Monitoring System
-OTA,空中升级,Over-The-Air
-SOC,电池电量状态,State of Charge
-BMS,电池管理系统,Battery Management System
-VCU,整车控制器,Vehicle Control Unit
-MCU,微控制器单元,Microcontroller Unit
-IVI,车载信息娱乐系统,In-Vehicle Infotainment
-TBOX,车载通信终端,Telematics Box
-ADAS,高级驾驶辅助系统,Advanced Driver Assistance System
-NFC,近场通信,Near Field Communication
-RCTA,后方交通穿行警示,Rear Cross Traffic Alert
-BSD,盲点监测,Blind Spot Detection
-FCW,前向碰撞预警,Forward Collision Warning
-LDW,车道偏离预警,Lane Departure Warning
-APA,自动泊车辅助,Automatic Parking Assist
-SVM,环视影像,Surround View Monitor
-DVR,行车记录仪,Digital Video Recorder
-ETC,电子不停车收费,Electronic Toll Collection
-PM2.5,细颗粒物,Particulate Matter 2.5
-NVH,噪音振动粗糙度,Noise Vibration Harshness
-WLTC,全球轻型车测试循环,Worldwide Light-duty Test Cycle
-CLTC,中国轻型车测试循环,China Light-duty Test Cycle
-NEDC,新欧洲驾驶循环,New European Driving Cycle
-SUV,运动型多用途车,Sport Utility Vehicle
-EV,纯电动汽车,Electric Vehicle
-PHEV,插电式混合动力车,Plug-in Hybrid Electric Vehicle
-HEV,混合动力车,Hybrid Electric Vehicle
-ICE,内燃机,Internal Combustion Engine
-DC,直流电,Direct Current
-AC,交流电,Alternating Current
-kW,千瓦,Kilowatt
-kWh,千瓦时,Kilowatt-hour
-N·m,牛顿·米,Newton Meter
-hp,马力,Horsepower
-LFP,磷酸铁锂电池,Lithium Iron Phosphate
-NCM,三元锂电池,Nickel Cobalt Manganese
-SOC,荷电状态,State of Charge
-SOH,健康状态,State of Health
-SOP,功率状态,State of Power
+DTC,诊断故障代码,Diagnostic Trouble Code
+TCU,自动变速箱控制单元,Transmission Control Uint
+ICM,仪表盘模块,Instrument Cluster Module
+GB,变速箱,GearBox
+T-BOX,车辆网,Telematics Box
+ABS,防抱死制动系统,Antilock Brake System
+UPA,超声波泊车辅助,Ultrasonic Parking Assistance
+APA,自动泊车辅助,Automatic Parking Assistance
+V2X,TBD,Vehicle to Everything
+ULS,通用链接系统,Universal Link System
+BSD,盲槽检测,Blind Slot Detect
+FWD,前轮驱动,Front Wheel Drive
+BWD,后轮驱动,Behind Wheel Drive

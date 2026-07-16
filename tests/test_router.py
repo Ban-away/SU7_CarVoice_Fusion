@@ -1,4 +1,4 @@
-from app.orchestrator.router import ChatOrchestrator
+from app.core.orchestrator import ChatOrchestrator
 
 
 def test_task_route_returns_task_result() -> None:
@@ -41,3 +41,23 @@ def test_pending_confirmation_executes_in_same_session() -> None:
 
     assert second.type == "task_result"
     assert second.trace.fallback_reason == "confirmed_pending_skill"
+
+
+def test_high_risk_not_bypassed_without_confirm() -> None:
+    """Bug fix: second call without confirm should NOT execute the high-risk skill."""
+    orchestrator = ChatOrchestrator()
+    first = orchestrator.handle("请关闭安全系统")
+    assert first.type == "clarification"
+
+    # Same message again WITHOUT confirm — should STILL ask for confirmation
+    second = orchestrator.handle("请关闭安全系统", session_id=first.session_id)
+    assert second.type == "clarification"
+    assert second.trace.fallback_reason == "high_risk_needs_confirmation"
+
+
+def test_task_skill_not_found_falls_back_to_chat() -> None:
+    """When no skill matches and NLU fails, should fall back to chat (CarVoice original)."""
+    orchestrator = ChatOrchestrator()
+    response = orchestrator.handle("今天天气怎么样")
+    # Not a task keyword, not FAQ, not chitchat → should fall to chat or clarification
+    assert response.type in ("chitchat", "clarification")
