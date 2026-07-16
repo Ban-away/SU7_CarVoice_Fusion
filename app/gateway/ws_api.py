@@ -15,6 +15,7 @@ async def ws_chat(websocket: WebSocket) -> None:
         while True:
             incoming = await websocket.receive_text()
             confirm = False
+            session_id = None
             message = incoming
 
             try:
@@ -22,6 +23,7 @@ async def ws_chat(websocket: WebSocket) -> None:
                 if isinstance(payload, dict):
                     message = str(payload.get("message", "")).strip()
                     confirm = bool(payload.get("confirm", False))
+                    session_id = payload.get("session_id")
             except json.JSONDecodeError:
                 pass
 
@@ -40,7 +42,7 @@ async def ws_chat(websocket: WebSocket) -> None:
                 )
                 continue
 
-            response = orchestrator.handle(message, confirm=confirm)
+            response = orchestrator.handle(message, confirm=confirm, session_id=session_id)
             await websocket.send_json(response.model_dump())
     except WebSocketDisconnect:
         return

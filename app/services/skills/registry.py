@@ -8,6 +8,8 @@ from app.services.skills import handlers
 class SkillSpec:
     name: str
     risk_level: str
+    category: str
+    description: str
     keywords: tuple[str, ...]
     handler: Callable[[str], str]
 
@@ -19,12 +21,59 @@ class SkillsRegistry:
 
     def _register_defaults(self) -> None:
         for spec in (
-            SkillSpec("media_control", "low", ("播放", "暂停", "下一首", "音乐"), handlers.media_control),
-            SkillSpec("navigate_to", "medium", ("导航", "前往", "去"), handlers.navigate_to),
-            SkillSpec("vehicle_status", "low", ("电量", "胎压", "续航", "状态"), handlers.vehicle_status),
+            SkillSpec(
+                "media_control",
+                "low",
+                "infotainment",
+                "控制媒体播放与切歌",
+                ("播放", "暂停", "下一首", "音乐"),
+                handlers.media_control,
+            ),
+            SkillSpec(
+                "navigate_to",
+                "medium",
+                "navigation",
+                "执行导航与目的地跳转",
+                ("导航", "前往", "去"),
+                handlers.navigate_to,
+            ),
+            SkillSpec(
+                "vehicle_status",
+                "low",
+                "vehicle",
+                "查询车辆健康、电量与状态",
+                ("电量", "胎压", "续航", "状态"),
+                handlers.vehicle_status,
+            ),
+            SkillSpec(
+                "ac_control",
+                "medium",
+                "climate",
+                "控制空调温度与风量",
+                ("空调", "温度", "制冷", "制热"),
+                handlers.ac_control,
+            ),
+            SkillSpec(
+                "window_control",
+                "medium",
+                "vehicle",
+                "控制车窗开闭",
+                ("车窗", "开窗", "关窗"),
+                handlers.window_control,
+            ),
+            SkillSpec(
+                "charge_management",
+                "medium",
+                "energy",
+                "查询充电状态与预约充电",
+                ("充电", "补能", "预约充电"),
+                handlers.charge_management,
+            ),
             SkillSpec(
                 "sensitive_vehicle_control",
                 "high",
+                "safety",
+                "高风险车辆控制能力（需要二次确认）",
                 ("自动驾驶", "关闭安全", "解锁车辆", "远程控制"),
                 handlers.sensitive_vehicle_control,
             ),
@@ -44,3 +93,17 @@ class SkillsRegistry:
 
     def list_skills(self) -> list[str]:
         return list(self._skills.keys())
+
+    def describe_skills(self) -> list[dict[str, str | list[str]]]:
+        skills = []
+        for spec in self._skills.values():
+            skills.append(
+                {
+                    "name": spec.name,
+                    "risk_level": spec.risk_level,
+                    "category": spec.category,
+                    "description": spec.description,
+                    "keywords": list(spec.keywords),
+                }
+            )
+        return skills

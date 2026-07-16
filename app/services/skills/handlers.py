@@ -23,5 +23,27 @@ def vehicle_status(message: str) -> str:
     return "车辆状态正常，胎压与车门状态均正常。"
 
 
+def ac_control(message: str) -> str:
+    if "调高" in message or "升高" in message:
+        return "已将空调温度调高 1℃。"
+    if "调低" in message or "降低" in message:
+        return "已将空调温度调低 1℃。"
+    return "已执行空调控制。"
+
+
+def window_control(message: str) -> str:
+    if "打开" in message:
+        return "已打开车窗。"
+    if "关闭" in message:
+        return "已关闭车窗。"
+    return "已执行车窗控制。"
+
+
+def charge_management(message: str) -> str:
+    if "预约" in message:
+        return "已为你创建充电预约。"
+    return "已查询充电管理信息。"
+
+
 def sensitive_vehicle_control(message: str) -> str:
     return "高风险车辆控制指令已接收，待二次确认后执行。"

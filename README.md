@@ -1,13 +1,13 @@
 # SU7_CarVoice_Fusion
 
-基于 **CarVoice_Agent + XIAOMI_SU7_RAG** 的融合后端 MVP，提供可运行的最小闭环（HTTP + WebSocket），并保留后续扩展骨架。
+基于 **CarVoice_Agent + XIAOMI_SU7_RAG** 的融合后端全量骨架，提供可运行闭环（HTTP + WebSocket）与可扩展的会话、技能、知识检索能力。
 
 ## 架构说明
 
 - `app/gateway`：统一入口（HTTP + WebSocket）
-- `app/orchestrator`：意图分类、路由决策、置信度门控与安全边界
+- `app/orchestrator`：意图分类、路由决策、置信度门控、会话状态与安全边界
 - `app/services/skills`：任务型技能执行层（白名单注册）
-- `app/services/knowledge`：知识服务（本地检索 + 可选 web 检索 + 引用拼装）
+- `app/services/knowledge`：知识服务（本地文档库加载 + 混合检索 + 可选 web 检索 + 引用拼装）
 - `app/shared`：schema、配置、日志、错误处理
 
 ## 已实现能力
@@ -23,12 +23,17 @@
    - `citations`
    - `trace`: `route`, `classifier_confidence`, `knowledge_hit_count`, `latency_ms`, `fallback_reason`, `risk_level`
 4. **Skills 白名单与风险边界**：
-   - 示例技能：`media_control`, `navigate_to`, `vehicle_status`
-   - 高风险技能占位：`sensitive_vehicle_control`（需二次确认）
-5. **Knowledge MVP**：
-   - `search_local_docs(query, top_k)`（内存 mock）
+   - 技能集：`media_control`, `navigate_to`, `vehicle_status`, `ac_control`, `window_control`, `charge_management`
+   - 高风险技能：`sensitive_vehicle_control`（会话内二次确认后执行）
+5. **Knowledge 全量检索链路**：
+   - `search_local_docs(query, top_k)`（本地文档库 + 混合打分）
    - `search_web_vertical(query)`（默认关闭，配置开启）
+   - `retrieve(query, top_k)`（本地优先 + web 回补）
    - `synthesize_with_citations(...)`（输出 `source` + `page`）
+6. **多轮会话融合**：
+   - `session_id` 贯穿 HTTP/WS
+   - 上下文改写（短追问拼接上一轮语义）
+   - 高风险待确认状态在会话内持久化
 
 ## 快速启动
 
@@ -113,6 +118,20 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
   -d '{"message":"asdfghjkl"}'
 ```
 
+### 技能白名单元数据
+
+```bash
+curl http://127.0.0.1:8000/api/v1/skills
+```
+
+### 知识检索调试接口
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/knowledge/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query":"SU7 续航", "top_k": 2}'
+```
+
 ## WebSocket 测试示例
 
 连接地址：`ws://127.0.0.1:8000/ws/chat`
@@ -123,11 +142,11 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
 {"message":"请播放音乐"}
 ```
 
-高风险确认样例：
+高风险确认样例（同一 session）：
 
 ```json
 {"message":"请关闭安全系统"}
-{"message":"请关闭安全系统","confirm":true}
+{"message":"确认执行","confirm":true,"session_id":"<上次响应中的session_id>"}
 ```
 
 第一条会返回 `clarification`，并在 `trace.fallback_reason=high_risk_needs_confirmation` 中标记风险确认占位。
@@ -141,6 +160,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
 - `CHITCHAT_CONFIDENCE_THRESHOLD`
 - `KNOWLEDGE_TOP_K`
 - `WEB_SEARCH_ENABLED`
+- `KNOWLEDGE_DOCS_PATH`
 
 ## 测试
 

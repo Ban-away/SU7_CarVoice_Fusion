@@ -16,3 +16,12 @@ def test_resolve_skill_from_keywords() -> None:
 
     assert skill is not None
     assert skill.name == "media_control"
+
+
+def test_describe_skills_contains_risk_and_category() -> None:
+    registry = SkillsRegistry()
+    skills = registry.describe_skills()
+
+    assert len(skills) >= 6
+    assert "risk_level" in skills[0]
+    assert "category" in skills[0]

@@ -1,0 +1,27 @@
+[
+  {
+    "content": "小米 SU7 标准版 CLTC 续航约 700km，长续航版本可达更高里程。",
+    "source": "su7_manual.pdf",
+    "page": 12
+  },
+  {
+    "content": "车机支持语音控制导航、媒体、空调和车辆设置，可通过唤醒词启动。",
+    "source": "su7_quick_start.pdf",
+    "page": 5
+  },
+  {
+    "content": "充电管理支持预约充电、补能站推荐与电池健康保护策略。",
+    "source": "su7_energy_guide.pdf",
+    "page": 18
+  },
+  {
+    "content": "车辆状态查询可返回胎压、电量、门窗与安全系统状态。",
+    "source": "su7_vehicle_control.pdf",
+    "page": 9
+  },
+  {
+    "content": "高风险控制指令需要二次确认，以保障驾驶安全。",
+    "source": "su7_safety_spec.pdf",
+    "page": 3
+  }
+]

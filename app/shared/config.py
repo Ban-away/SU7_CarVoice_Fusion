@@ -22,6 +22,7 @@ class Settings:
 
     knowledge_top_k: int = int(os.getenv("KNOWLEDGE_TOP_K", "3"))
     web_search_enabled: bool = _to_bool(os.getenv("WEB_SEARCH_ENABLED"), False)
+    knowledge_docs_path: str = os.getenv("KNOWLEDGE_DOCS_PATH", "data/knowledge/su7_docs.json")
 
 
 @lru_cache(maxsize=1)

@@ -32,3 +32,12 @@ def test_high_risk_skill_requires_confirmation() -> None:
 
     assert response.type == "clarification"
     assert response.trace.fallback_reason == "high_risk_needs_confirmation"
+
+
+def test_pending_confirmation_executes_in_same_session() -> None:
+    orchestrator = ChatOrchestrator()
+    first = orchestrator.handle("请关闭安全系统")
+    second = orchestrator.handle("确认", confirm=True, session_id=first.session_id)
+
+    assert second.type == "task_result"
+    assert second.trace.fallback_reason == "confirmed_pending_skill"
