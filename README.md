@@ -56,12 +56,53 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
   -d '{"message":"请导航到公司"}'
 ```
 
+返回示例：
+
+```json
+{
+  "type": "task_result",
+  "text": "已开始导航到公司。",
+  "citations": [],
+  "trace": {
+    "route": "Task",
+    "classifier_confidence": 0.9,
+    "knowledge_hit_count": null,
+    "latency_ms": 1,
+    "fallback_reason": null,
+    "risk_level": "medium"
+  }
+}
+```
+
 ### FAQ 路径（含 citations）
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"SU7 续航是多少"}'
+```
+
+返回示例（含引用）：
+
+```json
+{
+  "type": "faq_answer",
+  "text": "小米 SU7 标准版 CLTC 续航 700km。",
+  "citations": [
+    {
+      "source": "su7_manual.pdf",
+      "page": 12
+    }
+  ],
+  "trace": {
+    "route": "FAQ",
+    "classifier_confidence": 0.82,
+    "knowledge_hit_count": 1,
+    "latency_ms": 1,
+    "fallback_reason": null,
+    "risk_level": null
+  }
+}
 ```
 
 ### Unknown 路径（澄清）
@@ -88,6 +129,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
 {"message":"请关闭安全系统"}
 {"message":"请关闭安全系统","confirm":true}
 ```
+
+第一条会返回 `clarification`，并在 `trace.fallback_reason=high_risk_needs_confirmation` 中标记风险确认占位。
 
 ## 配置项
 

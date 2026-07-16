@@ -4,7 +4,7 @@ from app.orchestrator.classifier import classify_intent
 from app.services.knowledge.service import KnowledgeService
 from app.services.skills.registry import SkillsRegistry
 from app.shared.config import get_settings
-from app.shared.schemas import ChatResponse, Citation, Trace
+from app.shared.schemas import ChatResponse, Citation, RouteType, Trace
 
 
 class ChatOrchestrator:
@@ -110,7 +110,7 @@ class ChatOrchestrator:
             text=text,
             citations=[],
             trace=Trace(
-                route=route,  # type: ignore[arg-type]
+                route=self._normalize_route(route),
                 classifier_confidence=confidence,
                 latency_ms=self._latency_ms(start_time),
                 fallback_reason=fallback_reason,
@@ -121,3 +121,13 @@ class ChatOrchestrator:
     @staticmethod
     def _latency_ms(start_time: float) -> int:
         return int((time.perf_counter() - start_time) * 1000)
+
+    @staticmethod
+    def _normalize_route(route: str) -> RouteType:
+        if route == "Task":
+            return "Task"
+        if route == "FAQ":
+            return "FAQ"
+        if route == "Chitchat":
+            return "Chitchat"
+        return "Unknown"
