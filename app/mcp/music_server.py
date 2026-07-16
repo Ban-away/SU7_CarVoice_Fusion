@@ -7,7 +7,13 @@ track metadata (id, mid, name, subtitle, etc.).
 import asyncio
 from typing import Any, Dict, List
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:
+    raise ImportError(
+        "The 'mcp' package is required for the QQ Music MCP server. "
+        "Install it with: pip install mcp fastmcp"
+    )
 from qqmusic_api import search
 
 from app.shared.logging import get_logger

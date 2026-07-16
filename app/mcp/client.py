@@ -14,21 +14,35 @@ Usage::
 """
 
 import asyncio
+import logging
 from contextlib import AsyncExitStack
 from typing import Any, Dict, Optional
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+logger = logging.getLogger(__name__)
 
-from app.shared.logging import get_logger
-
-logger = get_logger(__name__)
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    _MCP_AVAILABLE = True
+except ImportError:
+    _MCP_AVAILABLE = False
+    ClientSession = None  # type: ignore
+    StdioServerParameters = None  # type: ignore
+    stdio_client = None  # type: ignore
 
 
 class MCPClient:
-    """Async MCP client that connects to a server over stdio and invokes tools."""
+    """Async MCP client that connects to a server over stdio and invokes tools.
+
+    Requires the ``mcp`` package to be installed (``pip install mcp``).
+    """
 
     def __init__(self) -> None:
+        if not _MCP_AVAILABLE:
+            raise ImportError(
+                "The 'mcp' package is required for MCPClient. "
+                "Install it with: pip install mcp"
+            )
         self.exit_stack = AsyncExitStack()
         self.session: Optional[ClientSession] = None
         self._stdio: Any = None

@@ -9,7 +9,14 @@ Requires the environment variable ``AMAP_API_KEY`` to be set.
 from typing import Any, Dict, List, Optional
 
 import requests
-from mcp.server.fastmcp import FastMCP
+
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:
+    raise ImportError(
+        "The 'mcp' package is required for the Amap MCP server. "
+        "Install it with: pip install mcp fastmcp"
+    )
 
 from app.shared.config import get_settings
 
