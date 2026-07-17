@@ -103,19 +103,18 @@ tmp/
 temp/
 
 # =============================================================================
-# 9. 允许跟踪的文件（覆盖上级规则）
+# 9. 可由代码生成的数据（不跟踪）
 # =============================================================================
-# 预构建的检索索引和预处理文档（项目资产，非模型权重）
-!data/knowledge/saved_index/*.pkl
-!data/knowledge/processed_docs/*.pkl
+# 索引产物（build_index.py 生成）
+data/knowledge/saved_index/
+data/knowledge/processed_docs/
 
-# PDF 提取图片（体积大，不跟踪）
+# PDF 提取图片（PDF 解析器生成）
 data/knowledge/saved_images/
 
-# 大型生成的训练数据（超过 GitHub 100MB 限制）
-data/training/qa_pairs/train_data.json
-data/training/qa_pairs/test_qa_pair_pred.json
-data/training/rerank/train.json
-data/training/rl/local_trajectories.json
-data/training/rl/local_trajectories_grpo.jsonl
-data/training/summary/train.json
+# 训练数据集（data_pipeline 生成）
+data/training/qa_pairs/
+data/training/rerank/
+data/training/summary/
+data/training/rl/
+data/training/benchmark/
