@@ -111,3 +111,11 @@ temp/
 
 # PDF 提取图片（体积大，不跟踪）
 data/knowledge/saved_images/
+
+# 大型生成的训练数据（超过 GitHub 100MB 限制）
+data/training/qa_pairs/train_data.json
+data/training/qa_pairs/test_qa_pair_pred.json
+data/training/rerank/train.json
+data/training/rl/local_trajectories.json
+data/training/rl/local_trajectories_grpo.jsonl
+data/training/summary/train.json
