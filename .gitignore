@@ -118,3 +118,7 @@ data/training/rerank/
 data/training/summary/
 data/training/rl/
 data/training/benchmark/
+
+# Milvus 数据库文件
+*.db
+data/training/benchmark/
