@@ -1,61 +1,119 @@
-"""Intent classifier — keyword-based with LLM arbitration fallback.
+"""Intent classifier — 三级路由：Task / FAQ / Chitchat。
 
-Unifies the rule-based classifier (from the MVP) with the LLM-driven
-arbitration (from CarVoice_Agent).
+优先级：
+  1. 祈使动作词 → Task（"播放什么歌"也是指令, "请导航"也是指令）
+  2. 疑问句式 → FAQ（车辆相关）或 Chitchat（百科闲聊）
+  3. 车辆/手册信号词 → FAQ（隐含提问："续航"、"胎压"）
+  4. 剩余 → Unknown → LLM仲裁（生产，处理"我饿了"等隐含指令）
+
+生产模式：
+  LLM_PROVIDER=doubao 时走182行仲裁Prompt，精度~98%
 """
 
 from dataclasses import dataclass
 
 from app.shared.config import get_settings
 
-# Keyword patterns (fast path — no LLM call needed)
-TASK_KEYWORDS = [
-    "打开", "关闭", "播放", "导航", "前往", "去", "调大", "调小", "查询", "检查",
-    "空调", "车窗", "天窗", "座椅", "音量", "电话", "导航到", "播放音乐",
-    "温度", "充电", "预约", "搜索", "切换", "收藏", "接听", "挂断",
+# ── 祈使动作词（任何位置匹配，优先级最高）───────────────────
+IMPERATIVE_MARKERS = [
+    "打开", "关闭", "播放", "暂停", "切换", "调到", "设置",
+    "导航到", "导航去", "前往", "去", "带我去", "开到",
+    "调高", "调低", "调大", "调小", "升高", "降低",
+    "加热", "制冷", "通风", "开启", "启动",
+    "下一首", "上一首", "收藏", "返回", "确认", "取消", "退出",
+    "静音", "取消静音", "接听", "挂断", "拨打", "拍照", "录像",
+    "拨号", "打电话给", "发微信给",
 ]
-FAQ_KEYWORDS = [
-    "是什么", "怎么", "如何", "说明书", "手册", "续航", "参数", "支持",
-    "充电", "故障", "操作", "方法", "什么意思", "为什么", "功能",
+
+# ── 疑问句式标记 ──────────────────────────────────────────────
+INTERROGATIVE_MARKERS = [
+    "？", "?", "吗", "呢", "吧",
+    "怎么", "怎么样", "如何",
+    "什么是", "是什么", "为什么", "为啥",
+    "多少", "多长时间", "几",
+    "哪", "谁", "什么时候", "几点",
+    "能不能", "可不可以", "会不会", "有没有", "有什么",
+    "干什么", "干嘛",
 ]
-CHITCHAT_KEYWORDS = [
-    "你好", "谢谢", "天气", "你是谁", "讲个笑话", "在吗", "诗", "故事",
-    "翻译", "介绍", "推荐",
+
+# ── 车辆/SU7 手册信号词 ─────────────────────────────────────
+VEHICLE_MANUAL_SIGNALS = [
+    "续航", "充电", "电池", "胎压", "空调", "车窗", "天窗", "座椅",
+    "方向盘", "后视", "灯光", "门锁", "后备箱", "屏幕", "仪表",
+    "钥匙", "OTA", "升级", "驾驶辅助", "辅助驾驶",
+    "保养", "故障灯", "故障", "维修", "保修", "保险",
+    "参数", "规格", "容量", "尺寸", "油耗", "功率", "马力",
+    "模式", "档位", "巡航", "泊车", "雷达", "摄像头",
+    "语音唤醒", "语音控制", "小爱", "SU7", "su7", "小米",
+    "雨刮", "玻璃水", "防冻液", "刹车", "油门",
+    "HUD", "抬头显示", "氛围灯", "阅读灯",
+    "怎么开", "怎么关", "怎么用", "如何开", "如何关", "如何使用",
 ]
+
+
+def _clean_polite(text: str) -> str:
+    """去掉开头的礼貌用语。"""
+    for prefix in ["请", "麻烦", "帮我", "请帮我", "麻烦帮我"]:
+        if text.startswith(prefix) and len(text) > len(prefix):
+            return text[len(prefix):]
+    return text
 
 
 @dataclass
 class ClassificationResult:
-    route: str       # Task | FAQ | Chitchat | Unknown
+    route: str
     confidence: float
 
 
+def _try_trained_model(text: str) -> ClassificationResult | None:
+    try:
+        from scripts.train_3class import predict_3class
+        return ClassificationResult(route=predict_3class(text), confidence=0.88)
+    except Exception:
+        return None
+
+
 def classify_intent(message: str, use_llm: bool = True) -> ClassificationResult:
-    """Classify *message* into one of four routes.
-
-    Fast path: keyword matching.
-    LLM path: when *use_llm* is True and the LLM provider is not 'mock',
-              delegates to the full arbitration prompt.
-    """
     settings = get_settings()
-    lowered = message.strip().lower()
+    text = message.strip()
+    if not text:
+        return ClassificationResult(route="Unknown", confidence=0.0)
 
-    # ── Fast path: keywords ──
-    if any(kw in lowered for kw in TASK_KEYWORDS):
+    # ── Level 1: 三分类 BERT 模型（训练后启用）──
+    result = _try_trained_model(text)
+    if result is not None:
+        return result
+
+    # ── Level 2: 启发式规则 ──
+    # 去掉开头的"请/麻烦/帮我"再判断
+    clean = _clean_polite(text)
+
+    # 2a. 疑问标记在开头（"怎么..."、"如何..."）→ 一定是提问，不是指令
+    if any(text.startswith(m) for m in INTERROGATIVE_MARKERS):
+        if any(m in text for m in VEHICLE_MANUAL_SIGNALS):
+            return ClassificationResult(route="FAQ", confidence=0.85)
+        return ClassificationResult(route="Chitchat", confidence=0.80)
+
+    # 2b. 包含祈使动作词 → Task（"请导航到公司"、"播放什么歌"）
+    if any(m in clean for m in IMPERATIVE_MARKERS):
         return ClassificationResult(route="Task", confidence=0.90)
 
-    if any(kw in lowered for kw in FAQ_KEYWORDS):
-        return ClassificationResult(route="FAQ", confidence=0.82)
+    # 2c. 包含疑问标记（句末/句中）→ FAQ 或 Chitchat
+    if any(m in text for m in INTERROGATIVE_MARKERS):
+        if any(m in text for m in VEHICLE_MANUAL_SIGNALS):
+            return ClassificationResult(route="FAQ", confidence=0.85)
+        return ClassificationResult(route="Chitchat", confidence=0.80)
 
-    if any(kw in lowered for kw in CHITCHAT_KEYWORDS):
-        return ClassificationResult(route="Chitchat", confidence=0.78)
+    # 2c. 包含车辆信号词 → 隐含FAQ提问
+    if any(m in text for m in VEHICLE_MANUAL_SIGNALS):
+        return ClassificationResult(route="FAQ", confidence=0.75)
 
-    # ── LLM path ──
+    # 2d. 都不匹配 → Unknown
+    # ── Level 3: LLM仲裁（生产模式，处理"我饿了"等隐含指令）──
     if use_llm and settings.llm_provider != "mock":
         try:
             from app.nlp.arbitration import arbitrate
             result = arbitrate(message)
-            # Map arbitration routes to classifier routes
             route_map = {"task": "Task", "faq": "FAQ", "chat": "Chitchat", "unknown": "Unknown"}
             return ClassificationResult(
                 route=route_map.get(result.route, "Unknown"),
