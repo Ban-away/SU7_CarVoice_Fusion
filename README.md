@@ -37,13 +37,13 @@
      → XIAOMI_SU7_RAG 检索（BM25/Milvus→WRRF→MiniCPM）→ 引用拼装 → faq_answer + citations[{source, page}]
 
   C. 百科闲聊
-     "今天天气怎么样"、"周杰伦是谁"、"有什么新闻"
+     "周杰伦是谁"、"附近有什么好吃的"、"你会讲笑话吗"
      → 拒识模型把关 → 通过则联网搜索 → LLM整合 → chitchat
      → 拒识不通过 → clarification
 
   隐含指令（"我饿了"、"下雨了"、"有点暗"）
      Mock: Unknown → clarification
-     生产: LLM_PROVIDER=doubao → 云端仲裁 → Task → 回退闲聊
+     生产: LLM_PROVIDER=doubao → 云端仲裁 → Task → 执行技能
 ```
 
 ### 意图分类三级路由
@@ -57,11 +57,12 @@
 Mock 模式下规则优先级：
 
 ```
-1. 疑问词在句首（"怎么..."、"如何..."）→ FAQ 或 Chitchat
-2. 祈使动作词（"打开"、"导航到"、"请..."）→ Task
-3. 句中疑问标记（"...吗"、"什么..."）→ FAQ 或 Chitchat
-4. 车辆信号词（"续航"、"胎压"）→ FAQ
-5. 都不匹配 → Unknown → LLM仲裁(生产) 或 clarification(Mock)
+1. 疑问 + 技能域（天气/导航/音乐/电话/股票）→ Task
+2. 疑问 + 车辆手册（空调/车窗/HUD/续航/胎压）→ FAQ
+3. 疑问 + 其他 → Chitchat
+4. 祈使动作词（"打开"、"导航到"、"请..."）→ Task
+5. 车辆信号词（无明确语气）→ FAQ
+6. 都不匹配 → Unknown → LLM仲裁(生产) 或 clarification(Mock)
 ```
 
 ---
@@ -70,7 +71,7 @@ Mock 模式下规则优先级：
 
 ### Mock 模式（30秒启动，零依赖）
 
-验证全部路由逻辑，不需要 GPU、不需要 API Key、不需要外部服务：
+不需要 GPU、API Key、外部服务。能回答问题——答案来自模板和本地规则（非 AI 生成），用于验证路由逻辑正确性：
 
 ```bash
 git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
@@ -82,32 +83,58 @@ cp .env.example .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-验证四路路由：
+四路路由验证：
 
 ```bash
-# 健康检查
 curl http://127.0.0.1:8080/healthz
+# → {"status":"ok"}
 
-# Task — 任务技能执行
+# Task — 模板回复（非AI）
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"请导航到公司"}'
+# → {"type":"task_result","text":"已开始导航到公司。"}
 
-# FAQ — 用户手册RAG检索 + 引用
+# FAQ — 本地5条文档 TF 打分检索（非AI）
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"SU7 续航是多少"}'
+# → {"type":"faq_answer","text":"...续航约700km","citations":[{"source":"su7_manual.pdf","page":12}]}
 
-# Chitchat — 百科闲聊 + 联网搜索
+# 天气 → Task（天气属于技能域，返回硬编码模板）
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"今天天气怎么样"}'
+# → {"type":"task_result","text":"北京今天天气：晴，18~25℃，空气质量良好"}
+
+# Chitchat — 模板回复
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"你好"}'
+# → {"type":"chitchat","text":"你好，我是SU7车载语音助手，很高兴为你服务。"}
 
 # Unknown — 澄清
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"我饿了"}'
+# → {"type":"clarification","text":"我还不太确定你的意图..."}
 ```
+
+Mock 模式各组件行为：
+
+| 组件 | Mock 行为 | 示例 |
+|------|----------|------|
+| 意图分类 | 疑问/祈使语气规则 | 规则匹配，<1ms |
+| 技能执行 | 7个技能模板 | "导航到公司" → `"已开始导航到公司。"` |
+| 天气 DM | 硬编码 | `"北京今天天气：晴，18~25℃"` |
+| FAQ 检索 | 本地 su7_docs.json (5条) TF打分 | 返回文档内容+页码 |
+| 闲聊 | 固定模板 | `"你好，我是SU7车载语音助手"` |
+| 联网搜索 | 预设关键词 mock | `WebSearchClient` 返回预定义hint |
+| NLG | 原样返回 | 不调用LLM润色 |
+| 拒识 | 默认通过 | `should_reject()` 返回 False |
+| 会话 | 内存 dict | 不依赖 Redis |
+
+切到生产只需配置 `.env`：`LLM_PROVIDER=doubao` + `RETRIEVER_BACKEND=hybrid`。
 
 ### 生产模式（GPU + vLLM + 外部服务）
 

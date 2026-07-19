@@ -58,6 +58,6 @@ def test_high_risk_not_bypassed_without_confirm() -> None:
 def test_task_skill_not_found_falls_back_to_chat() -> None:
     """When no skill matches and NLU fails, should fall back to chat (CarVoice original)."""
     orchestrator = ChatOrchestrator()
-    response = orchestrator.handle("今天天气怎么样")
-    # Not a task keyword, not FAQ, not chitchat → should fall to chat or clarification
+    response = orchestrator.handle("给我推荐一本书")
+    # Not task/FAQ/chitchat → should fall to chat or clarification
     assert response.type in ("chitchat", "clarification")

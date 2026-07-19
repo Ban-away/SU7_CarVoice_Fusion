@@ -25,6 +25,25 @@ IMPERATIVE_MARKERS = [
     "拨号", "打电话给", "发微信给",
 ]
 
+# ── 技能域标记（CarVoice A类：疑问句涉及这些域 → Task，不是 Chitchat）──
+SKILL_DOMAIN_MARKERS = [
+    # 天气
+    "天气", "温度", "气温", "度", "下雨", "下雪", "刮风", "雾霾", "空气质量",
+    "穿衣指数", "洗车指数", "紫外线", "日出", "日落", "湿度",
+    # 导航/出行
+    "导航", "路线", "路况", "限行", "堵车", "怎么走", "多远", "多久到",
+    # 音乐/媒体
+    "放首歌", "换首歌", "什么歌", "谁唱的", "播音乐", "放音乐",
+    # 电话
+    "打电话", "拨号", "接电话", "挂电话",
+    # 日历
+    "今天几号", "今天周几", "今天星期几", "农历", "黄历",
+    # 股票
+    "股票", "股价", "大盘", "涨了", "跌了",
+]
+# 注：车辆控制类（"打开空调"、"关闭车窗"）不在技能域中——
+#     疑问语气下的"怎么打开空调"→FAQ（用户手册），祈使语气下的"打开空调"→Task（指令）
+
 # ── 疑问句式标记 ──────────────────────────────────────────────
 INTERROGATIVE_MARKERS = [
     "？", "?", "吗", "呢", "吧",
@@ -88,18 +107,25 @@ def classify_intent(message: str, use_llm: bool = True) -> ClassificationResult:
     # 去掉开头的"请/麻烦/帮我"再判断
     clean = _clean_polite(text)
 
-    # 2a. 疑问标记在开头（"怎么..."、"如何..."）→ 一定是提问，不是指令
+    # 2a. 疑问标记在开头 → 进一步判断属于什么域
     if any(text.startswith(m) for m in INTERROGATIVE_MARKERS):
+        # 疑问 + 技能域（天气/导航/音乐/电话等）→ Task（CarVoice归为A类）
+        if any(m in text for m in SKILL_DOMAIN_MARKERS):
+            return ClassificationResult(route="Task", confidence=0.85)
+        # 疑问 + 车辆手册 → FAQ
         if any(m in text for m in VEHICLE_MANUAL_SIGNALS):
             return ClassificationResult(route="FAQ", confidence=0.85)
+        # 疑问 + 其他 → Chitchat
         return ClassificationResult(route="Chitchat", confidence=0.80)
 
-    # 2b. 包含祈使动作词 → Task（"请导航到公司"、"播放什么歌"）
+    # 2b. 包含祈使动作词 → Task
     if any(m in clean for m in IMPERATIVE_MARKERS):
         return ClassificationResult(route="Task", confidence=0.90)
 
-    # 2c. 包含疑问标记（句末/句中）→ FAQ 或 Chitchat
+    # 2c. 句中疑问标记 → 同2a逻辑
     if any(m in text for m in INTERROGATIVE_MARKERS):
+        if any(m in text for m in SKILL_DOMAIN_MARKERS):
+            return ClassificationResult(route="Task", confidence=0.85)
         if any(m in text for m in VEHICLE_MANUAL_SIGNALS):
             return ClassificationResult(route="FAQ", confidence=0.85)
         return ClassificationResult(route="Chitchat", confidence=0.80)
