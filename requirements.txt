@@ -1,17 +1,21 @@
-# ── Web framework ──
+# ── Web framework (required) ──
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.0.0
 
-# ── Async HTTP ──
+# ── Async HTTP (required) ──
 httpx>=0.27.0
 aiohttp>=3.9.0
 
-# ── LLM clients ──
+# ── LLM clients (required — Mock mode needs openai for vLLM SDK) ──
 openai>=1.0.0
 
 # ── Redis (optional — session persistence) ──
 redis>=5.0.0
+
+# ── Training (optional — train_intent/train_reject) ──
+scikit-learn>=1.3.0
+numpy>=1.24.0
 
 # ── Knowledge / RAG (optional — for production retrieval) ──
 # Uncomment for production:
@@ -19,17 +23,24 @@ redis>=5.0.0
 # sentence-transformers>=2.7.0
 # faiss-cpu>=1.8.0
 # jieba>=0.42.1
+# pymilvus>=2.4.0
+# torch>=2.0.0
+# transformers>=4.40.0
+# vllm>=0.6.0
+# peft>=0.11.0
+# bitsandbytes>=0.43.0
+# datasets>=2.20.0
+# accelerate>=0.33.0
 
-# ── MCP (Model Context Protocol) ──
+# ── MCP (optional — Amap/QQ Music) ──
 # mcp>=1.0.0
 # fastmcp>=2.0.0
+
+# ── Web reader (optional — RL read_page) ──
+# inscriptis>=2.0.0
 
 # ── RAG evaluation (optional) ──
 # ragas>=0.2.0
 
-# ── MCP dependencies ──
-# qqmusic-api>=0.2.0
-
-# ── Testing ──
+# ── Testing (required) ──
 pytest>=8.0.0
-httpx>=0.27.0

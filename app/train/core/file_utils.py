@@ -12,10 +12,18 @@ from hashlib import sha256
 import sys
 from io import open
 
-import boto3
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+    _HAS_BOTO3 = True
+except ImportError:
+    _HAS_BOTO3 = False
+
 import requests
-from botocore.exceptions import ClientError
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
 
 from app.shared.logging import get_logger
 
@@ -147,6 +155,8 @@ def s3_request(func):
 @s3_request
 def s3_etag(url):
     """Check ETag on S3 object."""
+    if not _HAS_BOTO3:
+        raise ImportError("boto3 required for S3 operations. Install: pip install boto3")
     s3_resource = boto3.resource("s3")
     bucket_name, s3_path = split_s3_path(url)
     s3_object = s3_resource.Object(bucket_name, s3_path)
@@ -156,6 +166,8 @@ def s3_etag(url):
 @s3_request
 def s3_get(url, temp_file):
     """Pull a file directly from S3."""
+    if not _HAS_BOTO3:
+        raise ImportError("boto3 required for S3 operations. Install: pip install boto3")
     s3_resource = boto3.resource("s3")
     bucket_name, s3_path = split_s3_path(url)
     s3_resource.Bucket(bucket_name).download_fileobj(s3_path, temp_file)

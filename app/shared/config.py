@@ -30,8 +30,8 @@ class Settings:
     # ---- LLM ----
     llm_provider: str = os.getenv("LLM_PROVIDER", "mock")  # mock | doubao | vllm | openai
     doubao_api_key: str = os.getenv("DOUBAO_API_KEY", "")
-    doubao_endpoint: str = os.getenv("DOUBAO_ENDPOINT", "https://ark.cn-beijing.volces.com/api/v3")
-    doubao_model: str = os.getenv("DOUBAO_MODEL", "ep-20240601170316-5dhwt")
+    doubao_endpoint: str = os.getenv("DOUBAO_ENDPOINT", os.getenv("DOUBAO_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"))
+    doubao_model: str = os.getenv("DOUBAO_MODEL", os.getenv("DOUBAO_MODEL_NAME", "ep-20240601170316-5dhwt"))
     vllm_base_url: str = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8000/v1")
 
     # ---- NLP service URLs ----
