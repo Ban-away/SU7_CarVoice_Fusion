@@ -238,34 +238,89 @@ RL 训练（Search-R1 + WebWalker）
 ### 各步骤命令
 
 ```bash
-# === Agent 训练 ===
+# === Agent 训练（CarVoice_Agent 原始流程）===
 
-# 下载模型
+# Agent 模型说明：
+#   意图模型: chinese_roberta_wwm_ext → 微调为 439 类分类器
+#   拒识模型: roberta_tiny_clue → 微调为 2 分类器 (accept/reject)
+#   训练数据: data/training/intent/train.txt (31w) + data/training/reject/train.txt (32w)
+
+# 1. 下载 BERT 预训练模型
+export HF_ENDPOINT=https://hf-mirror.com
 python scripts/download_models.py --preset agent
+# → models/chinese_roberta_wwm_ext/  +  models/roberta_tiny_clue/
 
-# 意图分类训练
+# 2. 意图分类模型训练 (自定义 BERT, 需 GPU 12GB+)
 python scripts/train_intent.py
+# 数据: data/training/intent/train.txt (31w, 439类)
+# 输出: models/saved/intent/bert.ckpt
+# Acc@1=85.2%  Acc@5=97.6%  F1=84.2%
 
-# 拒识模型训练
+# 3. 拒识模型训练 (BERT Tiny, 需 GPU 8GB+)
 python scripts/train_reject.py
+# 数据: data/training/reject/train.txt (32w, 2分类)
+# 输出: models/saved/reject/bert_tiny.ckpt
+# Acc=89.7%  F1=89.7%
 
-# 三分类训练
-python scripts/train_3class.py --train
+# 4. 启动训练好的推理服务 (3个微服务)
+python -m uvicorn app.train.servers:intent_app --port 8008
+python -m uvicorn app.train.servers:reject_app --port 8007
+python -m uvicorn app.train.servers:nlu_app --port 8009
 
-# === RAG 训练 ===
+# 5. 配置 .env 指向训练好的服务
+# NLU_URL=http://127.0.0.1:8009/chatnlu-server/v1
+# REJECT_URL=http://127.0.0.1:8007/reject-server/v1
 
-# 下载模型
+# 6. 三分类模型训练 (可选)
+python scripts/train_3class.py --build-data --train
+# 训练后 Mock 模式自动加载, 准确率 ~90%
+
+# === RAG 微调（只微调 Qwen3-8B，其他组件无需训练）===
+
+# RAG 组件说明：
+#   BM25 / BGE-Large / SPLADE / MiniCPM → 预训练模型直接使用，无需训练
+#   只有 Qwen3-8B 答案生成 → 需要 SFT 微调
+
+# 1. 下载模型（BGE+SPLADE+MiniCPM+Qwen3-8B 基座）
 python scripts/download_models.py --preset rag
 
-# 构建索引
+# 2. 构建索引（无需训练，BM25/Milvus/FAISS）
 python scripts/build_index.py --backend all
 
-# 生成数据
+# 3. 生成 QA 训练数据（~21K 对）
 python scripts/generate_data.py --step all
 
-# SFT 微调 (需 LLaMA-Factory)
+# 4. 安装 LLaMA-Factory
+git clone https://github.com/hiyouga/LLaMA-Factory.git LLaMA-Factory-main
 cd LLaMA-Factory-main
+pip install -r requirements.txt && pip install -e .
+
+# 5. 复制训练数据
+cp ../data/training/summary/train.json data/summary_train.json
+cp ../data/training/summary/test.json data/summary_test.json
+
+# 6. SFT 微调 (QLoRA 4-bit, LoRA rank=16, 5 epoch, 单卡 24GB)
 llamafactory-cli train ../configs/sft.yaml
+# → 输出: models/qwen3_lora_sft/
+
+# 7. 导出合并
+llamafactory-cli export ../configs/sft.yaml
+
+# 8. INT4 量化 (推理加速 43.8%)
+# python awq_quant.py
+# → 输出: models/qwen3_lora_sft_int4/
+
+# 9. vLLM 部署微调后模型
+vllm serve models/qwen3_lora_sft_int4 --host 0.0.0.0 --port 8000 \
+    --max-model-len 8192 --gpu-memory-utilization 0.90
+
+cd ..
+
+# === (可选) GRPO 强化学习 ===
+# python app/rl/data_builder.py
+# python app/rl/format_converter.py
+# python app/rl/rebalance_sft_data.py
+# python app/rl/train_grpo.py --stage all
 ```
 
 ---
