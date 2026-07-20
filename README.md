@@ -216,6 +216,97 @@ vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --max-model-len 4096 --gpu-m
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
+### 生产验证完整步骤
+
+安装和启动成功后，按以下步骤逐项验证。
+
+#### 1. 硬件确认
+
+```bash
+# 检查 GPU
+nvidia-smi
+# 显存: 推理≥16GB (INT4) 或 ≥24GB (FP16)
+
+# 检查存储
+df -h
+# 模型下载需要 ~24GB，推荐预留 50GB
+
+# 检查 vLLM 就绪
+curl http://127.0.0.1:8000/v1/models
+# → {"object":"list","data":[{"id":"Qwen/Qwen3-8B",...}]}
+```
+
+#### 2. 构建知识库索引
+
+```bash
+# BM25 索引 (CPU即可)
+python scripts/build_index.py --backend bm25
+
+# 或 Hybrid 索引 (含 Milvus BGE+SPLADE, 需GPU)
+python scripts/build_index.py --backend all --pdf data/knowledge/Xiaomi_SU7_Manual.pdf
+```
+
+#### 3. 验证 RAG 检索
+
+```bash
+# 知识检索调试接口
+curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query":"SU7 续航","top_k":3}'
+
+# → {"query":"SU7 续航","answer":"...","citations":[{source, page},...],"hit_count":3}
+
+# FAQ 端到端（分类→检索→引用）
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"SU7 续航是多少\"}"
+# → {"type":"faq_answer","citations":[{source, page},...],"trace":{"route":"FAQ"}}
+```
+
+#### 4. 验证 LLM 生成
+
+```bash
+# 闲聊 — vLLM 生成
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"你好\"}"
+# → {"type":"chitchat","text":"...(真实LLM生成内容)..."}
+
+# 确认文本不是模板（Mock的"你好，我是 SU7 车载语音助手"）
+```
+
+#### 5. 验证 RAG 评估
+
+```bash
+# 离线评估（需先生成评估集）
+python scripts/eval_rag.py --input data/training/qa_pairs/test_qa_pair_verify.json --dry-run
+# → 输出语义+关键词综合评分
+```
+
+#### 6. 验证 vLLM 性能
+
+```bash
+python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1
+# → TTFT均值、吞吐量 token/s
+```
+
+#### 验证清单
+
+| # | 验证项 | 命令 | Mock | 生产 |
+|---|--------|------|------|------|
+| 1 | 服务启动 | `curl /healthz` | ✅ | ✅ |
+| 2 | Task路由 | `"请导航到公司"` | ✅ 模板 | ✅ 真实执行 |
+| 3 | FAQ路由 | `"SU7续航是多少"` | ✅ 本地文档 | ✅ Milvus+LLM |
+| 4 | Chitchat路由 | `"你好"` | ✅ 模板 | ✅ vLLM生成 |
+| 5 | 天气→Task | `"今天天气怎么样"` | ✅ 路由正确 | ✅ DM天气 |
+| 6 | 隐含指令 | `"我饿了"` | ✅ clarification | ✅ LLM仲裁 |
+| 7 | 高风险确认 | `"关闭安全系统"` | ✅ | ✅ |
+| 8 | RAG检索 | `/api/v1/knowledge/retrieve` | ✅ TF打分 | ✅ BM25+Milvus+WRRF+MiniCPM |
+| 9 | RAG引用 | citations含source+page | ✅ | ✅ |
+| 10 | LLM生成 | 闲聊文本非模板 | — | ✅ |
+| 11 | vLLM性能 | benchmark | — | ✅ |
+| 12 | RAG评估 | eval_rag | — | ✅ |
+
 ### AutoDL 云 GPU 一键
 
 ```bash
