@@ -5,6 +5,8 @@ Uses ``sentence-transformers`` for dense embeddings and FAISS
 random embeddings when the required libraries are unavailable.
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Optional
 
@@ -23,6 +25,8 @@ try:
     _HAS_NUMPY = True
 except ImportError:  # pragma: no cover
     _HAS_NUMPY = False
+    import typing
+    np = typing.cast(object, None)  # type: ignore
 
 try:
     import faiss

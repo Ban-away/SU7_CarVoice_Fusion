@@ -131,9 +131,9 @@ class ChatOrchestrator:
                         ),
                         session_id=session.session_id,
                     )
-            # ── Skill + NLU both failed → fallback to chat (matching CarVoice original) ──
+            # ── Skill + NLU both failed → fallback to chat, keep Task route ──
             logger.info("Task skill not found, falling back to chat")
-            return self._handle_chitchat(rewritten, message, classification, session, start_time)
+            return self._chat_fallback(rewritten, message, session, start_time, original_route="Task")
 
         # High-risk check — always requires explicit confirm (never auto-execute)
         if skill.risk_level == "high":
@@ -289,6 +289,22 @@ class ChatOrchestrator:
             return generate_nlg(query, tool_response)
         except Exception:
             return tool_response
+
+    def _chat_fallback(self, rewritten: str, message: str, session, start_time: float,
+                        original_route: str = "Chitchat") -> ChatResponse:
+        """回退到闲聊，但保留原始分类路由。"""
+        self.sessions.append_history(session.session_id, message)
+        chat_text = self._maybe_chat(rewritten, session.session_id)
+        return ChatResponse(
+            type="chitchat", text=chat_text, citations=[],
+            trace=Trace(
+                route=self._normalize_route(original_route),
+                latency_ms=self._latency_ms(start_time),
+                session_id=session.session_id,
+                rewritten_query=rewritten,
+            ),
+            session_id=session.session_id,
+        )
 
     def _maybe_web_search(self, query: str) -> str | None:
         """联网搜索 — 实现时效性百科问答。

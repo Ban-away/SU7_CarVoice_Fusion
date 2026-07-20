@@ -44,6 +44,16 @@ SKILL_DOMAIN_MARKERS = [
 # 注：车辆控制类（"打开空调"、"关闭车窗"）不在技能域中——
 #     疑问语气下的"怎么打开空调"→FAQ（用户手册），祈使语气下的"打开空调"→Task（指令）
 
+# ── 基础闲聊标记（问候、感谢等）───────────────────────────────
+CHITCHAT_BASICS = [
+    "你好", "嗨", "哈喽", "hello", "hi",
+    "谢谢", "感谢", "多谢",
+    "再见", "拜拜", "bye",
+    "在吗", "在不在",
+    "早上好", "下午好", "晚上好", "晚安",
+    "辛苦了", "不客气",
+]
+
 # ── 疑问句式标记 ──────────────────────────────────────────────
 INTERROGATIVE_MARKERS = [
     "？", "?", "吗", "呢", "吧",
@@ -130,11 +140,15 @@ def classify_intent(message: str, use_llm: bool = True) -> ClassificationResult:
             return ClassificationResult(route="FAQ", confidence=0.85)
         return ClassificationResult(route="Chitchat", confidence=0.80)
 
-    # 2c. 包含车辆信号词 → 隐含FAQ提问
+    # 2d. 基础闲聊（问候/感谢/道别）→ Chitchat
+    if any(text == m for m in CHITCHAT_BASICS) or any(text.startswith(m) for m in ["你好", "谢谢", "再见", "早上好", "下午好", "晚上好", "嗨", "哈喽"]):
+        return ClassificationResult(route="Chitchat", confidence=0.90)
+
+    # 2e. 包含车辆信号词 → 隐含FAQ提问
     if any(m in text for m in VEHICLE_MANUAL_SIGNALS):
         return ClassificationResult(route="FAQ", confidence=0.75)
 
-    # 2d. 都不匹配 → Unknown
+    # 2f. 都不匹配 → Unknown
     # ── Level 3: LLM仲裁（生产模式，处理"我饿了"等隐含指令）──
     if use_llm and settings.llm_provider != "mock":
         try:

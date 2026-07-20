@@ -1,3 +1,4 @@
+from __future__ import annotations
 """BM25 retriever with Chinese tokenization support.
 
 Uses the ``rank_bm25`` library for scoring, with a fallback to simple

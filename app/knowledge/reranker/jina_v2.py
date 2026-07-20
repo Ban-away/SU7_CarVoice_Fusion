@@ -1,3 +1,4 @@
+from __future__ import annotations
 # -*- coding: utf-8 -*-
 
 
@@ -10,6 +11,21 @@ try:
     _HAS_TORCH = True
 except ImportError:
     _HAS_TORCH = False
+    class _DummyTorch:
+        class no_grad:
+            def __call__(self, fn): return fn
+            def __enter__(self): return None
+            def __exit__(self, *a): pass
+    torch = _DummyTorch()
+    Tensor = object  # type: ignore
+
+    class _DummyTorch:
+        class no_grad:
+            def __call__(self, fn): return fn
+            def __enter__(self): return None
+            def __exit__(self, *a): pass
+    torch = _DummyTorch()
+    Tensor = object  # type: ignore
 
 try:
     from transformers import AutoModelForSequenceClassification, AutoTokenizer

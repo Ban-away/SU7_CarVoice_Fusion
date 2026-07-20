@@ -73,51 +73,82 @@ Mock 模式下规则优先级：
 
 不需要 GPU、API Key、外部服务。能回答问题——答案来自模板和本地规则（非 AI 生成），用于验证路由逻辑正确性：
 
+**Linux / macOS：**
+
 ```bash
 git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
 cd SU7_CarVoice_Fusion
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-四路路由验证：
+**Windows (PowerShell)：**
+
+```powershell
+git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
+cd SU7_CarVoice_Fusion
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
+```
+
+四路路由验证（Linux / macOS — 用 `\` 续行）：
 
 ```bash
+# 健康检查
 curl http://127.0.0.1:8080/healthz
 # → {"status":"ok"}
 
-# Task — 模板回复（非AI）
+# Task — 模板回复
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"请导航到公司"}'
+  -d "{\"message\":\"请导航到公司\"}"
 # → {"type":"task_result","text":"已开始导航到公司。"}
 
-# FAQ — 本地5条文档 TF 打分检索（非AI）
+# FAQ — 本地文档检索
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"SU7 续航是多少"}'
-# → {"type":"faq_answer","text":"...续航约700km","citations":[{"source":"su7_manual.pdf","page":12}]}
+  -d "{\"message\":\"SU7 续航是多少\"}"
+# → {"type":"faq_answer","citations":[{"source":"su7_manual.pdf","page":12}]}
 
-# 天气 → Task（天气属于技能域，返回硬编码模板）
+# 天气 → Task（天气属于技能域）
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"今天天气怎么样"}'
+  -d "{\"message\":\"今天天气怎么样\"}"
 # → {"type":"task_result","text":"北京今天天气：晴，18~25℃，空气质量良好"}
 
-# Chitchat — 模板回复
+# Chitchat — 闲聊
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"你好"}'
-# → {"type":"chitchat","text":"你好，我是SU7车载语音助手，很高兴为你服务。"}
+  -d "{\"message\":\"你好\"}"
+# → {"type":"chitchat","text":"你好，我是SU7车载语音助手..."}
 
 # Unknown — 澄清
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"我饿了"}'
+  -d "{\"message\":\"我饿了\"}"
 # → {"type":"clarification","text":"我还不太确定你的意图..."}
+```
+
+四路路由验证（Windows CMD — 单行，双引号转义）：
+
+```cmd
+curl http://127.0.0.1:8080/healthz
+
+curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"请导航到公司\"}"
+
+curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"SU7 续航是多少\"}"
+
+curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"今天天气怎么样\"}"
+
+curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"你好\"}"
+
+curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"我饿了\"}"
 ```
 
 Mock 模式各组件行为：
@@ -138,6 +169,8 @@ Mock 模式各组件行为：
 
 ### 生产模式（GPU + vLLM + 外部服务）
 
+**Linux / macOS：**
+
 ```bash
 # 完整依赖
 pip install -r requirements.txt
@@ -148,18 +181,36 @@ pip install datasets accelerate peft bitsandbytes
 export HF_ENDPOINT=https://hf-mirror.com
 python scripts/download_models.py --preset core
 
-# 配置 .env
+# 配置
 cp .env.example .env
-# 编辑:
-#   LLM_PROVIDER=vllm
-#   RETRIEVER_BACKEND=hybrid
-#   RERANKER_BACKEND=minicpm
-#   NLU_URL=http://127.0.0.1:8009/chatnlu-server/v1
-#   REJECT_URL=http://127.0.0.1:8007/reject-server/v1
+# 编辑: LLM_PROVIDER=vllm, RETRIEVER_BACKEND=hybrid, RERANKER_BACKEND=minicpm
 
-# 终端1 — vLLM推理
+# 终端1 — vLLM
 vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
     --max-model-len 4096 --gpu-memory-utilization 0.90
+
+# 终端2 — 融合服务
+uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
+**Windows (PowerShell)：**
+
+```powershell
+# 完整依赖
+pip install -r requirements.txt
+pip install rank-bm25 jieba sentence-transformers faiss-gpu pymilvus transformers torch vllm
+pip install datasets accelerate peft bitsandbytes
+
+# 下载模型
+$env:HF_ENDPOINT="https://hf-mirror.com"
+python scripts/download_models.py --preset core
+
+# 配置
+copy .env.example .env
+# 编辑: LLM_PROVIDER=vllm, RETRIEVER_BACKEND=hybrid, RERANKER_BACKEND=minicpm
+
+# 终端1 — vLLM
+vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --max-model-len 4096 --gpu-memory-utilization 0.90
 
 # 终端2 — 融合服务
 uvicorn app.main:app --host 0.0.0.0 --port 8080
