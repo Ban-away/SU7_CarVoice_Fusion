@@ -95,11 +95,28 @@ class ClassificationResult:
 
 
 def _try_trained_model(text: str) -> ClassificationResult | None:
+    """Level 1: BERT 意图识别，与 CarVoice_Agent 一致。
+    先三分类模型(Task/FAQ/Chitchat)，fallback 到 439类 BERT 推断大类。
+    """
+    # a. 三分类模型
     try:
         from scripts.train_3class import predict_3class
         return ClassificationResult(route=predict_3class(text), confidence=0.88)
     except Exception:
-        return None
+        pass
+
+    # b. 439类 BERT 意图模型（CarVoice_Agent 原始方式）
+    try:
+        from app.nlp.intent import predict_intent
+        result = predict_intent(text)
+        if result:
+            func_name, _ = result
+            if func_name != "Unknown":
+                return ClassificationResult(route="Task", confidence=0.85)
+    except Exception:
+        pass
+
+    return None
 
 
 def classify_intent(message: str, use_llm: bool = True) -> ClassificationResult:

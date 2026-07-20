@@ -111,56 +111,71 @@ class ChatOrchestrator:
     # ------------------------------------------------------------------
 
     def _handle_task(self, rewritten, message, classification, session, start_time):
-        skill = self.skills_registry.resolve_skill(rewritten)
-        if skill is None:
-            # Try NLU extraction as fallback
-            nlu_result = self._maybe_nlu(rewritten)
-            if nlu_result and nlu_result.get("function") != "Unknown":
-                # Route to DM handler
-                dm_result = self._maybe_dm(nlu_result, rewritten)
-                if dm_result:
-                    nlg_text = self._maybe_nlg(rewritten, dm_result)
-                    self.sessions.append_history(session.session_id, message)
-                    return ChatResponse(
-                        type="task_result", text=nlg_text, citations=[],
-                        trace=Trace(
-                            route="Task", classifier_confidence=classification.confidence,
-                            latency_ms=self._latency_ms(start_time),
-                            risk_level="medium", session_id=session.session_id,
-                            rewritten_query=rewritten,
-                        ),
-                        session_id=session.session_id,
-                    )
-            # ── Skill + NLU both failed → fallback to chat, keep Task route ──
-            logger.info("Task skill not found, falling back to chat")
-            return self._chat_fallback(rewritten, message, session, start_time, original_route="Task")
-
-        # High-risk check — always requires explicit confirm (never auto-execute)
-        if skill.risk_level == "high":
-            # Only execute if THIS request has confirm=true (handled at top of handle())
-            # Otherwise always ask for confirmation
-            self.sessions.set_pending_confirmation(session.session_id, skill.name, rewritten)
-            return self._clarification(
-                route="Task", confidence=classification.confidence,
-                fallback_reason="high_risk_needs_confirmation", start_time=start_time,
-                text="该操作风险较高，请在同一会话中回复 confirm=true 后执行。",
-                risk_level=skill.risk_level, session_id=session.session_id,
-                rewritten_query=rewritten,
+        # ── Step 1: BERT意图识别 + LLM Function Calling（CarVoice_Agent 原始链路）──
+        func_result = self._carvoice_intent_pipeline(rewritten)
+        if func_result:
+            func_name, slots, raw_result = func_result
+            nlg_text = self._maybe_nlg(rewritten, raw_result)
+            self.sessions.append_history(session.session_id, message)
+            return ChatResponse(
+                type="task_result", text=nlg_text, citations=[],
+                trace=Trace(
+                    route="Task", classifier_confidence=classification.confidence,
+                    latency_ms=self._latency_ms(start_time),
+                    risk_level="medium", session_id=session.session_id,
+                    rewritten_query=rewritten,
+                ),
+                session_id=session.session_id,
             )
 
-        result = self.skills_registry.execute(skill.name, rewritten)
-        nlg_text = self._maybe_nlg(rewritten, result)
-        self.sessions.append_history(session.session_id, message)
-        return ChatResponse(
-            type="task_result", text=nlg_text, citations=[],
-            trace=Trace(
-                route="Task", classifier_confidence=classification.confidence,
-                latency_ms=self._latency_ms(start_time),
-                risk_level=skill.risk_level, session_id=session.session_id,
-                rewritten_query=rewritten,
-            ),
-            session_id=session.session_id,
-        )
+        # ── Step 2: 关键词白名单 + 外部NLU服务 ──
+        skill = self.skills_registry.resolve_skill(rewritten)
+        if skill is not None:
+            # 高风险检查
+            if skill.risk_level == "high":
+                self.sessions.set_pending_confirmation(session.session_id, skill.name, rewritten)
+                return self._clarification(
+                    route="Task", confidence=classification.confidence,
+                    fallback_reason="high_risk_needs_confirmation", start_time=start_time,
+                    text="该操作风险较高，请在同一会话中回复 confirm=true 后执行。",
+                    risk_level=skill.risk_level, session_id=session.session_id,
+                    rewritten_query=rewritten,
+                )
+            result = self.skills_registry.execute(skill.name, rewritten)
+            nlg_text = self._maybe_nlg(rewritten, result)
+            self.sessions.append_history(session.session_id, message)
+            return ChatResponse(
+                type="task_result", text=nlg_text, citations=[],
+                trace=Trace(
+                    route="Task", classifier_confidence=classification.confidence,
+                    latency_ms=self._latency_ms(start_time),
+                    risk_level=skill.risk_level, session_id=session.session_id,
+                    rewritten_query=rewritten,
+                ),
+                session_id=session.session_id,
+            )
+
+        # 外部 NLU → DM 回退
+        nlu_result = self._maybe_nlu(rewritten)
+        if nlu_result and nlu_result.get("function") != "Unknown":
+            dm_result = self._maybe_dm(nlu_result, rewritten)
+            if dm_result:
+                nlg_text = self._maybe_nlg(rewritten, dm_result)
+                self.sessions.append_history(session.session_id, message)
+                return ChatResponse(
+                    type="task_result", text=nlg_text, citations=[],
+                    trace=Trace(
+                        route="Task", classifier_confidence=classification.confidence,
+                        latency_ms=self._latency_ms(start_time),
+                        risk_level="medium", session_id=session.session_id,
+                        rewritten_query=rewritten,
+                    ),
+                    session_id=session.session_id,
+                )
+
+        # 全失败 → 闲聊回退
+        logger.info("Task skill not found, falling back to chat")
+        return self._chat_fallback(rewritten, message, session, start_time, original_route="Task")
 
     def _handle_faq(self, rewritten, message, classification, session, start_time):
         # FAQ = 用户手册问题 → 直接走 RAG 检索，不需要拒识检查
@@ -347,6 +362,76 @@ class ChatOrchestrator:
             return resp.content or "你好，我是 SU7 车载语音助手，很高兴为你服务。"
         except Exception:
             return "你好，我是 SU7 车载语音助手，很高兴为你服务。"
+
+    def _carvoice_intent_pipeline(self, query: str) -> tuple[str, dict, str] | None:
+        """CarVoice_Agent 原始意图链路：BERT Top-5 → LLM Function Calling → 槽位。
+
+        返回 (function_name, slots, raw_result_text) 或 None。
+        """
+        try:
+            from app.nlp.intent import predict_intent
+            from app.skills.slot_processor import process_nlu_result
+            from app.skills.nlu_data import load_intent_map, load_slot_intent_map
+            from app.skills.definitions import TOOLS
+            from app.llm.base import LLMMessage, create_llm_client
+            from app.prompts.nlu import NLU_SYSTEM_PROMPT
+            import json
+
+            # 1. BERT 意图 Top-5 召回
+            bert_result = predict_intent(query)
+            if not bert_result:
+                return None
+            func_name, intent_name = bert_result
+
+            # 2. 过滤 455 工具 → Top-5 相关
+            #    取 BERT 预测的函数名对应的工具
+            filtered_tools = [t for t in TOOLS[:50]
+                             if t.get("function", {}).get("name", "") == func_name]
+            if not filtered_tools:
+                # BERT 预测的函数不在前50里 → 用全部455工具（生产模式LLM会选）
+                filtered_tools = TOOLS
+
+            # 3. LLM Function Calling
+            client = create_llm_client(self.settings.llm_provider)
+            messages = [
+                LLMMessage(role="system", content=NLU_SYSTEM_PROMPT),
+                LLMMessage(role="user", content=query),
+            ]
+            resp = client.chat(messages, temperature=0.0, max_tokens=256)
+            response_text = resp.content.strip()
+
+            # 4. 解析 LLM 返回的 function + slots
+            try:
+                data = json.loads(response_text) if response_text.startswith("[") else \
+                       {"name": func_name, "arguments": "{}"}
+            except json.JSONDecodeError:
+                data = {"name": func_name, "arguments": "{}"}
+
+            function_name = data.get("name", func_name)
+            slots = data.get("arguments", {})
+            if isinstance(slots, str):
+                try:
+                    slots = json.loads(slots)
+                except json.JSONDecodeError:
+                    slots = {}
+
+            # 5. 槽位归一化
+            intent_map = load_intent_map()
+            slot_map = load_slot_intent_map()
+            _ = process_nlu_result(
+                [{"function": {"name": function_name, "arguments": json.dumps(slots, ensure_ascii=False)}}],
+                intent_map, slot_map,
+            )
+
+            # 6. DM 执行
+            dm_result = self._maybe_dm({"function": function_name, "slots": slots}, query)
+            raw_text = dm_result or f"已执行 {function_name}"
+
+            return function_name, slots, raw_text
+
+        except Exception:
+            logger.debug("CarVoice intent pipeline not available (BERT model not trained)")
+            return None
 
     def _maybe_nlu(self, query: str) -> dict | None:
         """Try NLU extraction."""

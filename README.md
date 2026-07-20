@@ -1,8 +1,6 @@
 # SU7_CarVoice_Fusion
 
-以 **CarVoice_Agent** 为主控框架，按需调用 **XIAOMI_SU7_RAG** 知识检索。
-
-两大源项目的全部代码、全部数据、全部业务逻辑已完整移植，零差异。
+以 **CarVoice_Agent** 为主控框架，按需调用 **XIAOMI_SU7_RAG** 知识检索。两个源项目的全部代码、全部数据、全部业务逻辑已移植，零差异。
 
 ---
 
@@ -10,10 +8,10 @@
 
 1. [整体架构](#整体架构)
 2. [快速开始](#快速开始)
-3. [推理流程详解](#推理流程详解)
-4. [训练流程详解](#训练流程详解)
-5. [API 接口](#api-接口)
-6. [项目验证](#项目验证)
+3. [推理流程](#推理流程)
+4. [训练流程](#训练流程)
+5. [生产验证](#生产验证)
+6. [API 接口](#api-接口)
 7. [配置项](#配置项)
 8. [脚本对照](#脚本对照)
 9. [项目结构](#项目结构)
@@ -24,46 +22,42 @@
 
 ```
 以 CarVoice_Agent 为主控框架：
-  用户输入 → 意图分类（疑问语气 vs 祈使指令）→ 分支路由
 
-  A. 任务技能指令
-     天气查询、导航去xxx、播放音乐、控制车窗/座椅/空调、电话、系统设置等
-     → 技能白名单（7个）→ 执行 → NLG润色 → task_result
-     → 未匹配则尝试 NLU(外部服务) → DM处理 → task_result
-     → 全失败回退闲聊
+用户输入 → 仲裁模型 (A/B/C/D) → 路由分发
 
-  B. 用户手册提问
-     "SU7续航多少"、"怎么打开空调"、"胎压多少"、"如何设置HUD"
-     → XIAOMI_SU7_RAG 检索（BM25/Milvus→WRRF→MiniCPM）→ 引用拼装 → faq_answer + citations[{source, page}]
+A. 任务技能指令
+   query改写(多轮) → NLU(BERT意图+LLM槽位) → MCP Server(Amap/QQ音乐) → NLG友好回复
+   含：天气、导航、音乐、车辆控制（车窗/座椅/空调）、电话、系统设置
 
-  C. 百科闲聊
-     "周杰伦是谁"、"附近有什么好吃的"、"你会讲笑话吗"
-     → 拒识模型把关 → 通过则联网搜索 → LLM整合 → chitchat
-     → 拒识不通过 → clarification
+B. 用户手册提问（融合创新 — 原版走闲聊，现走RAG）
+   XIAOMI_SU7_RAG检索 → BM25+Milvus→WRRF→MiniCPM → 带页码引用 → faq_answer
 
-  隐含指令（"我饿了"、"下雨了"、"有点暗"）
-     Mock: Unknown → clarification
-     生产: LLM_PROVIDER=doubao → 云端仲裁 → Task → 执行技能
+C. 百科闲聊
+   拒识模型 → 联网搜索(SerpAPI/Serper/Bing/Doubao) → LLM整合 → chitchat
 ```
 
-### 意图分类三级路由
+### 意图识别 — 三级路由（与CarVoice_Agent一致）
 
-| 级别 | 方案 | 准确率 | 依赖 | 说明 |
-|------|------|--------|------|------|
-| Level 1 | 本地三分类BERT(可选) | ~90% | `scripts/train_3class.py` 训练后加载 | 最优Mock方案 |
-| Level 2 | 启发式规则 | ~90%常见场景 | 零 | 疑问/祈使语气标记 |
-| Level 3 | 云端LLM仲裁 | ~98% | `LLM_PROVIDER=doubao` | 处理隐含指令 |
-
-Mock 模式下规则优先级：
+| 级别 | 方案 | 准确率 | 说明 |
+|------|------|--------|------|
+| Level 1 | BERT 意图识别 (439类) | ~85% top-1 | 训练后自动启用，与CarVoice完全一致 |
+| Level 2 | 启发式规则 | ~90%常见场景 | 疑问/祈使语气标记，Mock默认 |
+| Level 3 | LLM 仲裁 (182行Prompt) | ~98% | `LLM_PROVIDER=doubao`，含隐含指令 |
 
 ```
-1. 疑问 + 技能域（天气/导航/音乐/电话/股票）→ Task
-2. 疑问 + 车辆手册（空调/车窗/HUD/续航/胎压）→ FAQ
-3. 疑问 + 其他 → Chitchat
-4. 祈使动作词（"打开"、"导航到"、"请..."）→ Task
-5. 车辆信号词（无明确语气）→ FAQ
-6. 都不匹配 → Unknown → LLM仲裁(生产) 或 clarification(Mock)
+Level 1 (BERT已训练): BERT(439类) → 过滤455函数 → LLM Function Calling → 槽位 → DM
+Level 2 (Mock默认):    疑问+技能域→Task / 疑问+车辆→FAQ / 疑问+其他→Chitchat / 祈使→Task
+Level 3 (生产模式):     Doubao LLM 182行仲裁Prompt
 ```
+
+### 路由决策表
+
+| 分类 | 触发条件 | 处理方式 | 输出 |
+|------|---------|---------|------|
+| Task(A) | 技能域指令 | BERT+LLM→技能白名单→NLG | task_result |
+| FAQ(B) | 用户手册提问 | RAG检索→引用拼装 | faq_answer + citations |
+| Chitchat(C/D) | 百科闲聊 | 拒识→联网搜索→LLM | chitchat |
+| Unknown | 低置信度/隐含指令 | Mock:clarification 生产:LLM仲裁 | clarification / LLM判断 |
 
 ---
 
@@ -71,7 +65,7 @@ Mock 模式下规则优先级：
 
 ### Mock 模式（30秒启动，零依赖）
 
-不需要 GPU、API Key、外部服务。能回答问题——答案来自模板和本地规则（非 AI 生成），用于验证路由逻辑正确性：
+不需要 GPU、API Key、外部服务。答案来自模板和本地规则，用于验证路由逻辑：
 
 **Linux / macOS：**
 
@@ -85,7 +79,7 @@ cp .env.example .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-**Windows (PowerShell)：**
+**Windows：**
 
 ```powershell
 git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
@@ -97,85 +91,202 @@ copy .env.example .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-四路路由验证（Linux / macOS — 用 `\` 续行）：
-
-```bash
-# 健康检查
-curl http://127.0.0.1:8080/healthz
-# → {"status":"ok"}
-
-# Task — 模板回复
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":\"请导航到公司\"}"
-# → {"type":"task_result","text":"已开始导航到公司。"}
-
-# FAQ — 本地文档检索
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":\"SU7 续航是多少\"}"
-# → {"type":"faq_answer","text":"小米 SU7 标准版 CLTC 续航约 700km，长续航版本可达更高里程。；车机支持语音控制导航、媒体、空调和车辆设置，可通过唤醒词启动。","citations":[{"source":"su7_manual.pdf","page":12},{"source":"su7_quick_start.pdf","page":5}],"trace":{"route":"FAQ","classifier_confidence":0.85,"knowledge_hit_count":2,...}}
-
-# 天气 → Task（天气属于技能域，Mock模式天气技能未注册，回退闲聊但route=Task）
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":\"今天天气怎么样\"}"
-# → {"type":"chitchat","text":"你好，我是 SU7 车载语音助手，很高兴为你服务。","trace":{"route":"Task",...}}
-
-# Chitchat — 闲聊
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":\"你好\"}"
-# → {"type":"chitchat","text":"你好，我是SU7车载语音助手..."}
-
-# Unknown — 澄清
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":\"我饿了\"}"
-# → {"type":"clarification","text":"我还不太确定你的意图..."}
-```
-
-四路路由验证（Windows CMD — 单行，双引号转义）：
+验证（Windows CMD 格式）：
 
 ```cmd
 curl http://127.0.0.1:8080/healthz
+# → {"status":"ok"}
 
 curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"请导航到公司\"}"
+# → {"type":"task_result","text":"已开始导航到公司。","trace":{"route":"Task","classifier_confidence":0.9,...}}
 
 curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"SU7 续航是多少\"}"
+# → {"type":"faq_answer","text":"小米 SU7 标准版 CLTC 续航约 700km，长续航版本可达更高里程。；车机支持语音控制导航、媒体、空调和车辆设置，可通过唤醒词启动。","citations":[{"source":"su7_manual.pdf","page":12},{"source":"su7_quick_start.pdf","page":5}],"trace":{"route":"FAQ",...}}
 
 curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"今天天气怎么样\"}"
+# → {"type":"chitchat","text":"你好，我是 SU7 车载语音助手，很高兴为你服务。","trace":{"route":"Task",...}}
+# 注: route=Task 正确（天气属于技能域），type=chitchat 因Mock模式天气技能未注册，回退闲聊
 
 curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"你好\"}"
+# → {"type":"chitchat","text":"你好，我是 SU7 车载语音助手，很高兴为你服务。","trace":{"route":"Chitchat",...}}
 
 curl -X POST http://127.0.0.1:8080/api/v1/chat -H "Content-Type: application/json" -d "{\"message\":\"我饿了\"}"
+# → {"type":"clarification","text":"我还不太确定你的意图...","trace":{"route":"Unknown",...}}
 ```
 
 Mock 模式各组件行为：
 
-| 组件 | Mock 行为 | 示例 |
-|------|----------|------|
+| 组件 | 行为 | 示例 |
+|------|------|------|
 | 意图分类 | 疑问/祈使语气规则 | 规则匹配，<1ms |
-| 技能执行 | 7个技能模板 | "导航到公司" → `"已开始导航到公司。"` |
-| 天气 DM | 硬编码 | `"北京今天天气：晴，18~25℃"` |
-| FAQ 检索 | 本地 su7_docs.json (5条) TF打分 | 返回文档内容+页码 |
-| 闲聊 | 固定模板 | `"你好，我是SU7车载语音助手"` |
-| 联网搜索 | 预设关键词 mock | `WebSearchClient` 返回预定义hint |
-| NLG | 原样返回 | 不调用LLM润色 |
-| 拒识 | 默认通过 | `should_reject()` 返回 False |
-| 会话 | 内存 dict | 不依赖 Redis |
+| 技能执行 | 7个技能模板 | "请导航到公司" → `"已开始导航到公司。"` |
+| RAG 检索 | 本地 su7_docs.json (5条) TF打分 | 返回内容+正确source+page |
+| 天气 DM | 硬编码模板 | `"北京今天天气：晴，18~25℃"` |
+| 闲聊 | 固定模板 | `"你好，我是 SU7 车载语音助手"` |
+| 联网搜索 | mock 预设hint | WebSearchClient 返回预定义内容 |
+| NLG | 原样返回 | 不调用LLM |
+| 拒识 | 默认通过 | 不调用外部服务 |
 
-切到生产只需配置 `.env`：`LLM_PROVIDER=doubao` + `RETRIEVER_BACKEND=hybrid`。
+切到生产只需 `.env` 中改一行：`LLM_PROVIDER=doubao`。
 
-### 生产模式（GPU + vLLM + 外部服务）
+---
 
-**Linux / macOS：**
+## 推理流程
+
+### Task 路径
+
+```
+用户输入
+  ├─ Query 改写 (LLM指代消解 + 25%字符重叠安全校验)
+  ├─ 仲裁分类 → Task(A)
+  │
+  ├─ BERT 意图识别 (439类, Top-5)
+  ├─ 过滤 455 函数定义 → Top-5 候选
+  ├─ LLM Function Calling (选择最佳函数 + 提取槽位)
+  ├─ 槽位归一化 (position映射、extreme提取、percentage转换)
+  ├─ DM 处理器 (maps/music/weather)
+  ├─ NLG 润色 ("你是一个有用的车载语音助手...")
+  └─ task_result
+```
+
+### FAQ 路径
+
+```
+用户输入
+  ├─ Query 改写
+  ├─ 仲裁分类 → FAQ(B)
+  │
+  ├─ RAG 检索
+  │   ├─ BM25 Recall (top-15, jieba+停用词)
+  │   ├─ Milvus Hybrid (top-40, BGE-Large + SPLADE v2, WeightedRanker)
+  │   ├─ WRRF Fusion (weights=[0.7,0.7], k=60)
+  │   └─ MiniCPM Rerank (top-12)
+  ├─ synthesize_with_citations
+  └─ faq_answer + citations[{source, page}]
+```
+
+### Chitchat 路径
+
+```
+用户输入
+  ├─ Query 改写
+  ├─ 仲裁分类 → Chitchat(C/D)
+  │
+  ├─ 拒识模型 (REJECT_URL:8007)
+  │   ├─ 不拒识 → 继续
+  │   ├─ 拒识 + 关联到上轮 → 继续
+  │   └─ 拒识 + 不关联 → clarification
+  ├─ 联网搜索 (SerpAPI→Serper→Bing→Doubao 四级回退)
+  ├─ LLM 整合搜索结果
+  └─ chitchat
+```
+
+### Mock vs 生产
+
+| 组件 | Mock | 生产 |
+|------|------|------|
+| 意图分类 | 疑问/祈使语气规则 | BERT(439类) / Doubao LLM仲裁 |
+| NLU | 关键词匹配 | BERT Top-5 + LLM Function Calling |
+| 技能执行 | 7个模板 | 455函数 + slot + DM + NLG |
+| RAG 检索 | su7_docs.json TF打分 | BM25+Milvus→WRRF→MiniCPM |
+| 闲聊生成 | 模板 | Doubao/vLLM 流式生成 |
+| 联网搜索 | mock预设 | SerpAPI/Serper/Bing/Doubao回退 |
+| NLG | 原样返回 | LLM转自然语言 |
+| 拒识 | 默认通过 | REJECT_URL(8007) BERT模型 |
+| 会话 | 内存dict | Redis |
+
+---
+
+## 训练流程
+
+### 整体流水线
+
+```
+数据准备
+  ├─ build_index.py → BM25 / Milvus / FAISS 索引
+  ├─ generate_data.py --step qa → QA对生成(~823条)
+  ├─ generate_data.py --step filter → 质量过滤 + 缩写扩展
+  └─ generate_data.py --step dataset → Summary + Rerank 训练集
+
+Agent 训练（CarVoice_Agent 原始流程）
+  ├─ BERT 意图模型: train_intent.py (31w条)
+  │   → models/saved/intent/bert.ckpt (Acc@1=85.2%, Acc@5=97.6%)
+  └─ BERT 拒识模型: train_reject.py (32w条)
+      → models/saved/reject/bert_tiny.ckpt (Acc=89.7%)
+
+三分类训练（Task/FAQ/Chitchat）
+  └─ train_3class.py → 自动构建数据集 → BERT训练 → ~90%
+
+RAG 训练（XIAOMI_SU7_RAG 原始流程）
+  ├─ download_models.py --preset rag → BGE, SPLADE, MiniCPM, Qwen3-8B
+  ├─ LLaMA-Factory SFT (configs/sft.yaml) → QLoRA 4-bit, LoRA rank=16
+  └─ INT4量化 → 吞吐 465→669 token/s (+43.8%)
+
+RL 训练（Search-R1 + WebWalker）
+  ├─ data_builder.py → 轨迹生成 (500网络兜底 + 全量本地)
+  ├─ format_converter.py → SFT/GRPO格式 + 标签修复
+  ├─ rebalance_sft_data.py → web 33% : local 67%
+  ├─ train_grpo.py → SFT warmup + GRPO (TRL, 6维奖励)
+  └─ verify_export.py → 导出验证
+
+评估
+  ├─ run_agent.py --eval → Agent 端到端 88.6%
+  ├─ eval_rag.py → 语义+关键词 0.8965, RAGas 0.94
+  └─ batch_eval.py → RL vs baseline
+```
+
+### 各步骤命令
+
+```bash
+# === Agent 训练 ===
+
+# 下载模型
+python scripts/download_models.py --preset agent
+
+# 意图分类训练
+python scripts/train_intent.py
+
+# 拒识模型训练
+python scripts/train_reject.py
+
+# 三分类训练
+python scripts/train_3class.py --train
+
+# === RAG 训练 ===
+
+# 下载模型
+python scripts/download_models.py --preset rag
+
+# 构建索引
+python scripts/build_index.py --backend all
+
+# 生成数据
+python scripts/generate_data.py --step all
+
+# SFT 微调 (需 LLaMA-Factory)
+cd LLaMA-Factory-main
+llamafactory-cli train ../configs/sft.yaml
+```
+
+---
+
+## 生产验证
+
+### 硬件要求
+
+| 用途 | 显卡 | 显存 | 存储 |
+|------|------|------|------|
+| 推理(INT4) | RTX 3060 | ≥12GB | ~30GB |
+| 推理(FP16) | RTX 3090/4090 | ≥24GB | ~50GB |
+| LoRA 训练 | RTX 3090/4090 | ≥24GB | ~50GB |
+| 全量训练/GRPO | A100 | ≥40GB | ~100GB |
+
+生产者启动：
 
 ```bash
 # 完整依赖
 pip install -r requirements.txt
 pip install rank-bm25 jieba sentence-transformers faiss-gpu pymilvus transformers torch vllm
-pip install datasets accelerate peft bitsandbytes
 
 # 下载模型
 export HF_ENDPOINT=https://hf-mirror.com
@@ -185,385 +296,79 @@ python scripts/download_models.py --preset core
 cp .env.example .env
 # 编辑: LLM_PROVIDER=vllm, RETRIEVER_BACKEND=hybrid, RERANKER_BACKEND=minicpm
 
-# 终端1 — vLLM
+# 终端1: vLLM
 vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
     --max-model-len 4096 --gpu-memory-utilization 0.90
 
-# 终端2 — 融合服务
+# 终端2: 融合服务
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
-**Windows (PowerShell)：**
-
-```powershell
-# 完整依赖
-pip install -r requirements.txt
-pip install rank-bm25 jieba sentence-transformers faiss-gpu pymilvus transformers torch vllm
-pip install datasets accelerate peft bitsandbytes
-
-# 下载模型
-$env:HF_ENDPOINT="https://hf-mirror.com"
-python scripts/download_models.py --preset core
-
-# 配置
-copy .env.example .env
-# 编辑: LLM_PROVIDER=vllm, RETRIEVER_BACKEND=hybrid, RERANKER_BACKEND=minicpm
-
-# 终端1 — vLLM
-vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --max-model-len 4096 --gpu-memory-utilization 0.90
-
-# 终端2 — 融合服务
-uvicorn app.main:app --host 0.0.0.0 --port 8080
-```
-
-### 生产验证完整步骤
-
-安装和启动成功后，按以下步骤逐项验证。
-
-#### 1. 硬件确认
+### 验证清单
 
 ```bash
-# 检查 GPU
+# 1. 硬件确认
 nvidia-smi
-# 显存: 推理≥16GB (INT4) 或 ≥24GB (FP16)
+curl http://127.0.0.1:8000/v1/models     # vLLM 就绪
 
-# 检查存储
-df -h
-# 模型下载需要 ~24GB，推荐预留 50GB
-
-# 检查 vLLM 就绪
-curl http://127.0.0.1:8000/v1/models
-# → {"object":"list","data":[{"id":"Qwen/Qwen3-8B",...}]}
-```
-
-#### 2. 构建知识库索引
-
-```bash
-# BM25 索引 (CPU即可)
-python scripts/build_index.py --backend bm25
-
-# 或 Hybrid 索引 (含 Milvus BGE+SPLADE, 需GPU)
-python scripts/build_index.py --backend all --pdf data/knowledge/Xiaomi_SU7_Manual.pdf
-```
-
-#### 3. 验证 RAG 检索
-
-```bash
-# 知识检索调试接口
-curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query":"SU7 续航","top_k":3}'
-
-# → {"query":"SU7 续航","answer":"...","citations":[{source, page},...],"hit_count":3}
-
-# FAQ 端到端（分类→检索→引用）
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":\"SU7 续航是多少\"}"
-# → {"type":"faq_answer","citations":[{source, page},...],"trace":{"route":"FAQ"}}
-```
-
-#### 4. 验证 LLM 生成
-
-```bash
-# 闲聊 — vLLM 生成
-curl -X POST http://127.0.0.1:8080/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":\"你好\"}"
-# → {"type":"chitchat","text":"...(真实LLM生成内容)..."}
-
-# 确认文本不是模板（Mock的"你好，我是 SU7 车载语音助手"）
-```
-
-#### 5. 验证 RAG 评估
-
-```bash
-# 离线评估（需先生成评估集）
-python scripts/eval_rag.py --input data/training/qa_pairs/test_qa_pair_verify.json --dry-run
-# → 输出语义+关键词综合评分
-```
-
-#### 6. 验证 vLLM 性能
-
-```bash
-python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1
-# → TTFT均值、吞吐量 token/s
-```
-
-#### 验证清单
-
-| # | 验证项 | 命令 | Mock | 生产 |
-|---|--------|------|------|------|
-| 1 | 服务启动 | `curl /healthz` | ✅ | ✅ |
-| 2 | Task路由 | `"请导航到公司"` | ✅ 模板 | ✅ 真实执行 |
-| 3 | FAQ路由 | `"SU7续航是多少"` | ✅ 本地文档 | ✅ Milvus+LLM |
-| 4 | Chitchat路由 | `"你好"` | ✅ 模板 | ✅ vLLM生成 |
-| 5 | 天气→Task | `"今天天气怎么样"` | ✅ 路由正确 | ✅ DM天气 |
-| 6 | 隐含指令 | `"我饿了"` | ✅ clarification | ✅ LLM仲裁 |
-| 7 | 高风险确认 | `"关闭安全系统"` | ✅ | ✅ |
-| 8 | RAG检索 | `/api/v1/knowledge/retrieve` | ✅ TF打分 | ✅ BM25+Milvus+WRRF+MiniCPM |
-| 9 | RAG引用 | citations含source+page | ✅ | ✅ |
-| 10 | LLM生成 | 闲聊文本非模板 | — | ✅ |
-| 11 | vLLM性能 | benchmark | — | ✅ |
-| 12 | RAG评估 | eval_rag | — | ✅ |
-
-### AutoDL 云 GPU 一键
-
-```bash
-git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
-cd SU7_CarVoice_Fusion
-bash scripts/autodl_start.sh mock    # Mock 验证
-bash scripts/autodl_start.sh vllm    # 全功能
-```
-
----
-
-## 推理流程详解
-
-### Mock 模式 vs 生产模式
-
-| 组件 | Mock (`LLM_PROVIDER=mock`) | 生产 |
-|------|---------------------------|------|
-| 意图分类 | 启发式规则（疑问/祈使语气） | Doubao LLM 182行 仲裁 Prompt |
-| 技能执行 | 模板回复 | NLU(端口8009) + DM + NLG |
-| 闲聊生成 | 模板回复 | Doubao/vLLM 流式生成 |
-| 联网搜索 | WebSearchClient mock | SerpAPI/Serper/Bing/Doubao 回退链 |
-| RAG检索 | BM25 TF打分 | BM25+Milvus(BGE+SPLADE)→WRRF→MiniCPM |
-| NLG润色 | 直接返回结果 | Doubao/vLLM 转自然语言 |
-| 拒识 | 默认通过 | 外部REJECT_URL(端口8007) |
-| 改写 | 简单拼接 | Doubao LLM 指代消解 |
-| 会话 | 内存 dict | Redis |
-
-### 在线推理主流程
-
-```
-用户输入（HTTP POST /api/v1/chat 或 WebSocket /ws/chat）
-  │
-  ├─ 查询改写（多轮指代消解）
-  │     Mock: 简单拼接   Production: LLM + 25%字符重叠安全校验
-  │
-  ├─ 意图分类（三级路由）
-  │     Mock: 疑问/祈使语气规则   Production: Doubao仲裁(182行Prompt)
-  │
-  ├─ 路由分发
-  │   │
-  │   ├─ Task（任务技能指令）
-  │   │   技能白名单匹配 → execute → NLG → task_result
-  │   │   → 高风险需二次确认 (confirm=true)
-  │   │   → 未匹配 → NLU(外部8009) → DM(maps/music/weather) → task_result
-  │   │   → 全失败 → 闲聊回退
-  │   │
-  │   ├─ FAQ（用户手册提问）
-  │   │   不走拒识，直接 RAG 检索
-  │   │   → retrieve(BM25/Milvus→WRRF→MiniCPM)
-  │   │   → synthesize_with_citations
-  │   │   → faq_answer + citations[{source, page}]
-  │   │   → 召回不足 → clarification
-  │   │
-  │   └─ Chitchat（百科闲聊）
-  │       拒识模型把关 + 多轮关联判断
-  │       → 拒绝 → clarification
-  │       → 通过 → 联网搜索 → LLM整合 → chitchat
-  │       → 联网不可用 → LLM闲聊回退
-  │
-  └─ 统一响应
-       {type, text, citations[{source, page}], trace{route, confidence, latency_ms, ...}, session_id}
-```
-
-### RAG 检索管线
-
-```
-用户问题
-  ├─ Query Rewrite（HyDE风格，LLM扩展关键词 — 可选）
-  ├─ BM25 Recall (top-15)   jieba 分词 + 停用词过滤
-  ├─ Milvus Hybrid (top-40) BGE-Large-zh-v1.5 (dense) + SPLADE v2 (sparse), WeightedRanker
-  ├─ WRRF Fusion   wrrf_fusion([bm25, milvus], weights=[0.7, 0.7], k=60)
-  ├─ MiniCPM Rerank (top-12)   bge-reranker-v2-minicpm-layerwise
-  ├─ LLM Generate   Qwen3-8B vLLM streaming, 引用标记【1】【2】
-  └─ Post-Processing   正则提取引用号 → 映射 page + images
-```
-
-### RL Search-R1 推理（独立管线，需 vLLM + RL 模型）
-
-```
-用户问题 → vLLM(RL模型)
-  ├─ 模型生成 <search_local>关键词</search_local>
-  │   └─ 系统拦截 → LocalSearchTool → 注入 <information>结果</information>
-  ├─ 模型继续 <search_web>小米SU7 关键词</search_web>（本地不足时）
-  │   └─ 系统拦截 → WebSearchTool(bing→serpapi→serper→doubao) → 注入 <information>
-  ├─ 模型可选 <read_page>URL</read_page>（深度阅读）
-  │   └─ 系统拦截 → WebPageReader.fetch(url) → 注入 <information>
-  └─ 模型最终 <answer>答案</answer>
-      └─ compute_reward() 6维评分
-```
-
----
-
-## 训练流程详解
-
-### 整体流水线
-
-```
-数据准备 ─────────────────────────────────────────────────────────
-  ├─ build_index.py → BM25 / Milvus / FAISS 索引
-  ├─ generate_data.py --step qa → QA 对生成（~823条）
-  ├─ generate_data.py --step filter → 质量过滤 + 缩写扩展
-  └─ generate_data.py --step dataset → Summary + Rerank 训练集
-
-Agent 训练（CarVoice_Agent 原始流程）───────────────────────────
-  ├─ download_models.py --preset agent → BERT 预训练模型
-  ├─ train_intent.py → 自定义BERT(1206行) + 31w条，Acc@5=97.6%
-  └─ train_reject.py → BERT Tiny + 32w条，Acc=89.7%
-
-三分类训练（融合项目特有）─────────────────────────────────────
-  └─ train_3class.py --build-data → 从 intent/reject/chats 构建
-     └─ --train → 三分类BERT(Task/FAQ/Chitchat) → ~90%准确率
-
-RAG 训练（XIAOMI_SU7_RAG 原始流程）────────────────────────────
-  ├─ download_models.py --preset rag → BGE, SPLADE, MiniCPM, Qwen3
-  ├─ LLaMA-Factory SFT (configs/sft.yaml) → QLoRA 4-bit, LoRA rank=16
-  └─ INT4 量化 → 吞吐 465→669 token/s (+43.8%)
-
-RL 训练（Search-R1 + WebWalker）─────────────────────────────────
-  ├─ data_builder.py → 网络兜底轨迹 500条 + 本地可答轨迹 全量
-  ├─ format_converter.py → SFT/GRPO格式 + 标签自动修复
-  ├─ rebalance_sft_data.py → web 33% : local 67%
-  ├─ train_grpo.py → SFT warmup + GRPO (TRL, 6维奖励)
-  └─ verify_export.py → 导出验证
-
-评估 ────────────────────────────────────────────────────────────
-  ├─ run_agent.py --eval → Agent 端到端 88.6%
-  ├─ eval_rag.py → 语义+关键词 0.8965, RAGas context_recall 0.94
-  └─ batch_eval.py → RL模型 vs baseline 对比
-```
-
-### 各训练步骤详解
-
-#### Agent 意图分类训练
-
-```bash
-# 下载模型
-python scripts/download_models.py --preset agent
-
-# 训练意图模型 (RoBERTa-wwm-ext, 31w条训练语料)
-python scripts/train_intent.py
-# 输出: models/saved/intent/bert.ckpt
-# Acc@1=85.2%  Acc@3=96.6%  Acc@5=97.6%  F1=84.2%
-
-# 训练拒识模型 (3层BERT Tiny, 32w条训练语料)
-python scripts/train_reject.py
-# 输出: models/saved/reject/bert_tiny.ckpt
-# Acc=89.7%  F1=89.7%
-
-# 启动推理服务
-python -m uvicorn app.train.servers:intent_app --port 8008  # 意图
-python -m uvicorn app.train.servers:reject_app --port 8007  # 拒识
-python -m uvicorn app.train.servers:nlu_app --port 8009     # NLU
-```
-
-#### 三分类模型训练（Task/FAQ/Chitchat）
-
-```bash
-# 从现有数据自动构建三分类训练集
-python scripts/train_3class.py --build-data
-# 产出: data/training/3class/{train,dev,test}.txt + class.txt
-
-# 训练
-python scripts/train_3class.py --train
-# 输出: models/saved/3class/bert.ckpt
-# 训练后自动替换 Mock 模式的启发式规则，准确率提升至 ~90%
-```
-
-#### RAG 知识库索引构建
-
-```bash
-# BM25 索引（CPU即可）
-python scripts/build_index.py --backend bm25
-
-# 全部索引（BM25 + FAISS + Milvus，需GPU）
+# 2. 构建索引
 python scripts/build_index.py --backend all
 
-# 指定PDF
-python scripts/build_index.py --pdf data/knowledge/Xiaomi_SU7_Manual.pdf --backend all
+# 3. RAG 检索验证
+curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
+  -H "Content-Type: application/json" -d "{\"query\":\"SU7 续航\",\"top_k\":3}"
+
+# 4. LLM 生成验证（确认非模板文本）
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" -d "{\"message\":\"你好\"}"
+
+# 5. RAG 评估
+python scripts/eval_rag.py --input data/training/qa_pairs/test_qa_pair_verify.json --dry-run
+
+# 6. vLLM 性能
+python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1
 ```
 
-#### RAG 训练数据生成
-
-```bash
-# QA 对生成（需 LLM_PROVIDER=doubao 或 vllm）
-python scripts/generate_data.py --step qa
-
-# 质量过滤 + 缩写扩展
-python scripts/generate_data.py --step filter
-
-# 构建训练数据集
-python scripts/generate_data.py --step dataset
-```
-
-#### Qwen3-8B SFT 微调
-
-```bash
-# 安装 LLaMA-Factory
-git clone https://github.com/hiyouga/LLaMA-Factory.git LLaMA-Factory-main
-cd LLaMA-Factory-main && pip install -r requirements.txt && pip install -e . && cd ..
-
-# 复制训练数据
-cp data/training/summary/train.json LLaMA-Factory-main/data/summary_train.json
-cp data/training/summary/test.json LLaMA-Factory-main/data/summary_test.json
-
-# 训练（configs/sft.yaml: QLoRA 4-bit, LoRA rank=16, 5 epoch）
-cd LLaMA-Factory-main && llamafactory-cli train ../configs/sft.yaml
-
-# 导出 + INT4量化
-llamafactory-cli export ../configs/sft.yaml
-```
-
-#### RL GRPO 训练
-
-```bash
-# 1. 生成轨迹
-python -m app.rl.data_builder       # 网络兜底轨迹
-python -m app.rl.build_local_trajectories  # 本地可答轨迹
-
-# 2. 格式转换
-python -m app.rl.format_converter
-
-# 3. 再平衡
-python -m app.rl.rebalance_sft_data
-
-# 4. 训练
-python -m app.rl.train_grpo --stage all
-```
+| # | 验证项 | Mock | 生产 |
+|---|--------|------|------|
+| 1 | Task 路由 | ✅ 模板 | ✅ BERT+LLM真实执行 |
+| 2 | FAQ 路由 | ✅ 本地文档+source/page | ✅ Milvus+LLM |
+| 3 | Chitchat 路由 | ✅ 模板 | ✅ vLLM生成 |
+| 4 | 天气→Task | ✅ 路由正确 | ✅ DM天气执行 |
+| 5 | 隐含指令 | ✅ clarification | ✅ LLM仲裁 |
+| 6 | 高风险二次确认 | ✅ | ✅ |
+| 7 | RAG 检索 | ✅ TF打分 | ✅ BM25+Milvus+WRRF+MiniCPM |
+| 8 | RAG 引用(source+page) | ✅ | ✅ |
+| 9 | LLM 生成 | — | ✅ |
+| 10 | vLLM 性能 | — | ✅ |
+| 11 | RAG 评估 | — | ✅ |
 
 ---
 
 ## API 接口
 
-### HTTP
-
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/healthz` | 健康检查 |
 | `POST` | `/api/v1/chat` | 单轮对话 |
-| `GET` | `/api/v1/skills` | 技能白名单（7个，含 risk_level） |
-| `GET` | `/api/v1/functions` | 函数定义（455个） |
+| `GET` | `/api/v1/skills` | 技能白名单 (7个) |
+| `GET` | `/api/v1/functions` | 函数定义 (455个) |
 | `POST` | `/api/v1/knowledge/retrieve` | 知识检索调试 |
+| `WS` | `/ws/chat` | WebSocket 实时会话 |
 
 ### 请求/响应
 
 ```json
-// 请求
 POST /api/v1/chat
-{"message": "请导航到公司", "confirm": false, "session_id": null}
+{"message":"请导航到公司","confirm":false,"session_id":null}
 
-// 响应
 {
   "type": "task_result",
   "text": "已开始导航到公司。",
   "citations": [],
   "trace": {
     "route": "Task",
-    "classifier_confidence": 0.90,
+    "classifier_confidence": 0.9,
     "knowledge_hit_count": null,
     "latency_ms": 1,
     "fallback_reason": null,
@@ -575,22 +380,40 @@ POST /api/v1/chat
 }
 ```
 
-`type` 取值：`task_result` | `faq_answer` | `chitchat` | `clarification` | `error`
+`type`: `task_result` | `faq_answer` | `chitchat` | `clarification` | `error`
 
 ### WebSocket
 
 ```
 ws://127.0.0.1:8080/ws/chat
-
 → {"message":"请播放音乐"}
-← {"type":"task_result","text":"已执行媒体控制指令。",...}
+← {"type":"task_result",...}
 
 → {"message":"请关闭安全系统"}
 ← {"type":"clarification","trace":{"fallback_reason":"high_risk_needs_confirmation"},...}
-
 → {"message":"确认执行","confirm":true,"session_id":"xxx"}
 ← {"type":"task_result",...}
 ```
+
+---
+
+## 配置项
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LLM_PROVIDER` | mock | LLM后端：mock / doubao / vllm / openai |
+| `DOUBAO_API_KEY` | — | 豆包 API Key |
+| `VLLM_BASE_URL` | http://127.0.0.1:8000/v1 | vLLM 推理地址 |
+| `RETRIEVER_BACKEND` | mock | mock / bm25 / milvus / hybrid |
+| `RERANKER_BACKEND` | mock | mock / minicpm |
+| `HYBRID_DENSE_BACKEND` | milvus | hybrid 向量后端：milvus / faiss |
+| `WEB_SEARCH_ENABLED` | false | 联网搜索开关 |
+| `NLU_URL` | — | 外部 NLU 服务地址 |
+| `REJECT_URL` | — | 外部拒识服务地址 |
+| `REDIS_URL` | — | Redis 连接 (无则内存) |
+| `AMAP_API_KEY` | — | 高德地图 API Key |
+
+完整见 `.env.example`。
 
 ---
 
@@ -601,80 +424,31 @@ ws://127.0.0.1:8080/ws/chat
 pytest -q -v
 
 # Agent 流水线测试
-python scripts/run_agent.py -i                          # 交互式
+python scripts/run_agent.py -i                          # 交互
 python scripts/run_agent.py --query "打开空调"           # 单条
 python scripts/run_agent.py --file data/nlu/multi_test.txt  # 批量
 python scripts/run_agent.py --eval --file data/nlu/multi_test.txt  # 评测
 
-# RAG 评估
-python scripts/eval_rag.py --input data/training/qa_pairs/test_qa_pair_verify.json
-
-# 意图分类测试
-python scripts/train_3class.py --predict "怎么打开空调"
-
-# vLLM 性能压测
-python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1
-
-# 基线对比测试
-python scripts/baseline_compare.py --model local
+# RAG 检索
+curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
+  -H "Content-Type: application/json" -d "{\"query\":\"SU7 续航\",\"top_k\":3}"
 ```
-
----
-
-## 配置项
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `LLM_PROVIDER` | mock | LLM 后端：mock / doubao / vllm / openai |
-| `DOUBAO_API_KEY` | — | 豆包 API Key |
-| `DOUBAO_ENDPOINT` | https://ark.cn-beijing.volces.com/api/v3 | 豆包地址 |
-| `DOUBAO_MODEL` | — | 豆包模型 ID |
-| `VLLM_BASE_URL` | http://127.0.0.1:8000/v1 | vLLM 地址 |
-| `RETRIEVER_BACKEND` | mock | mock / bm25 / milvus / hybrid |
-| `RERANKER_BACKEND` | mock | mock / minicpm |
-| `HYBRID_DENSE_BACKEND` | milvus | hybrid 模式下向量后端：milvus / faiss |
-| `WEB_SEARCH_ENABLED` | false | 联网搜索开关 |
-| `NLU_URL` | — | 外部 NLU 服务地址（端口8009） |
-| `REJECT_URL` | — | 外部拒识服务地址（端口8007） |
-| `REDIS_URL` | — | Redis 连接（无则内存） |
-| `AMAP_API_KEY` | — | 高德地图 API Key |
-| `TASK_CONFIDENCE_THRESHOLD` | 0.75 | Task 路由阈值 |
-| `FAQ_CONFIDENCE_THRESHOLD` | 0.65 | FAQ 路由阈值 |
-| `CHITCHAT_CONFIDENCE_THRESHOLD` | 0.60 | Chitchat 路由阈值 |
-| `KNOWLEDGE_TOP_K` | 3 | RAG 检索返回数 |
-| `ABBR_CSV_PATH` | data/abbr/abbr_ch.csv | 汽车缩写表 |
-
-完整见 `.env.example`。
 
 ---
 
 ## 脚本对照
 
-### XIAOMI_SU7_RAG → 融合
-
-| 原始脚本 | 融合脚本 | 功能 |
-|---------|---------|------|
-| `build_index.py` | `scripts/build_index.py` | PDF→索引构建 |
-| `generate_all_data.py` | `scripts/generate_data.py` | QA生成+过滤+数据集 |
-| `generate_sft_data.py` | `scripts/generate_data.py --step dataset` | 训练集构建 |
-| `final_score.py` | `scripts/eval_rag.py` | RAG评估 |
-| `infer.py` | `POST /api/v1/chat` | 在线推理 |
-| `src/rl/infer_rl.py` | `scripts/rl_infer.py` | RL推理 |
-| `deploy/auto_vllm_server.py` | `scripts/run_vllm.py` | vLLM自动启动 |
-| `deploy/benchmark.py` | `scripts/benchmark_vllm.py` | 性能压测 |
-| `deploy/baseline_gpt4o.py` | `scripts/baseline_compare.py` | 基线对比 |
-| `deploy/download_models.py` | `scripts/download_models.py` | 模型下载 |
-
-### CarVoice_Agent → 融合
-
-| 原始脚本 | 融合脚本 | 功能 |
-|---------|---------|------|
-| `download_models.py` | `scripts/download_models.py` | 模型下载 |
-| `server.sh` | `scripts/start_all_services.sh` | 多服务启动 |
-| `dialog.py` | `scripts/run_agent.py -i` | 交互测试 |
-| `test.py` | `scripts/run_agent.py --file` | 批量测试 |
-| `intent_client.py` 等 | `scripts/run_agent.py --eval` | 评测 |
-| `train/run.py` | `scripts/train_intent.py` / `scripts/train_reject.py` | 训练 |
+| 原始项目 | 原始脚本 | 融合脚本 |
+|---------|---------|---------|
+| CarVoice_Agent | download_models.py | scripts/download_models.py |
+| CarVoice_Agent | server.sh | scripts/start_all_services.sh |
+| CarVoice_Agent | dialog.py / test.py | scripts/run_agent.py |
+| CarVoice_Agent | train/run.py | scripts/train_intent.py / train_reject.py |
+| XIAOMI_SU7_RAG | build_index.py | scripts/build_index.py |
+| XIAOMI_SU7_RAG | generate_all_data.py | scripts/generate_data.py |
+| XIAOMI_SU7_RAG | final_score.py | scripts/eval_rag.py |
+| XIAOMI_SU7_RAG | infer.py / infer_rl.py | POST /api/v1/chat / scripts/rl_infer.py |
+| XIAOMI_SU7_RAG | deploy/* | scripts/{run_vllm,benchmark_vllm,baseline_compare,download_models}.py |
 
 ---
 
@@ -686,150 +460,73 @@ SU7_CarVoice_Fusion/
 │   ├── main.py                      # FastAPI 入口
 │   ├── api/                         # HTTP + WebSocket 网关
 │   ├── core/                        # 主控编排
-│   │   ├── orchestrator.py          # 中央调度（改写→分类→路由→响应）
-│   │   ├── classifier.py            # 意图分类（三级：BERT模型/启发式/LLM仲裁）
-│   │   └── session.py               # 会话管理（Redis/内存）
-│   │
-│   ├── nlp/                         # NLP 管道（CarVoice client/ 移植）
-│   │   ├── arbitration.py           # LLM仲裁（A/B/C/D四分类，182行Prompt）
-│   │   ├── rewrite.py               # 查询改写（指代消解 + 安全校验）
+│   │   ├── orchestrator.py          # 中央调度 (改写→分类→路由→响应)
+│   │   ├── classifier.py            # 三级分类 (BERT→规则→LLM仲裁)
+│   │   └── session.py               # 会话管理 (Redis/内存)
+│   ├── nlp/                         # NLP 管道 (CarVoice client/ 全部移植)
+│   │   ├── arbitration.py           # LLM仲裁 (A/B/C/D, 182行Prompt)
+│   │   ├── intent.py                # BERT 意图识别 (439类)
+│   │   ├── rewrite.py               # 查询改写 (指代消解 + 安全校验)
 │   │   ├── nlu.py                   # NLU 意图槽位提取
 │   │   ├── nlg.py                   # NLG 自然语言生成
 │   │   ├── reject.py                # 拒识模型
 │   │   └── correlation.py           # 多轮关联判断
-│   │
-│   ├── skills/                      # 技能执行（CarVoice function_call/ 移植）
+│   ├── skills/                      # 技能执行
 │   │   ├── definitions.py           # 455 函数定义
-│   │   ├── registry.py              # 白名单注册表（7技能 + risk_level）
-│   │   ├── nlu_data.py              # NLU数据加载（slot_intent + intent_map）
+│   │   ├── registry.py              # 白名单注册表 (7技能 + risk_level)
 │   │   ├── slot_processor.py        # 槽位归一化
-│   │   └── dm/                      # DM 处理器
-│   │       ├── factory.py           # DM 工厂
-│   │       ├── maps.py              # 导航（Go_POI）
-│   │       ├── music.py             # 音乐（Search_Music）
-│   │       └── weather.py           # 天气（Query_Weather）
-│   │
-│   ├── knowledge/                   # 知识 RAG（SU7_RAG src/ 移植）
+│   │   └── dm/                      # DM 处理器 (maps/music/weather)
+│   ├── knowledge/                   # 知识 RAG (SU7_RAG src/ 全部移植)
 │   │   ├── retriever/ (8个)         # BM25, FAISS, Milvus, Hybrid, TF-IDF, Qwen3
-│   │   ├── reranker/  (5个)         # MiniCPM, BGE-M3, JinaV2, Qwen3, Qwen3-vLLM
+│   │   ├── reranker/ (5个)          # MiniCPM, BGE-M3, JinaV2, Qwen3, Qwen3-vLLM
 │   │   ├── parser/                  # PDF 解析
 │   │   ├── generator.py             # LLM 答案生成
-│   │   ├── synthesizer.py           # 引用拼装（post_processing）
+│   │   ├── synthesizer.py           # 引用拼装
 │   │   ├── chunker.py               # 语义分块
 │   │   ├── web_search.py            # Web 垂直搜索
-│   │   ├── semantic_chunk_server.py # 语义切分服务（6000）
-│   │   ├── manual_store.py          # MongoDB 手册存储
-│   │   └── service.py               # KnowledgeService 外观
-│   │
+│   │   ├── semantic_chunk_server.py # 语义切分服务 (端口6000)
+│   │   └── manual_store.py          # MongoDB 手册存储
 │   ├── llm/                         # LLM 抽象层
-│   │   ├── base.py                  # 基类 + 工厂
-│   │   ├── doubao.py                # 豆包（CarVoice 原始技术栈）
-│   │   ├── vllm.py                  # vLLM（SU7_RAG 原始技术栈）
+│   │   ├── doubao.py                # 豆包 (CarVoice 原始技术栈)
+│   │   ├── vllm.py                  # vLLM (SU7_RAG 原始技术栈)
 │   │   ├── openai_client.py         # OpenAI 兼容
-│   │   └── mock.py                  # Mock（本地开发）
-│   │
-│   ├── mcp/                         # MCP 协议
-│   │   ├── client.py                # MCP 客户端
-│   │   ├── amap_server.py           # 高德地图（13 工具）
-│   │   └── music_server.py          # QQ 音乐
-│   │
-│   ├── prompts/                     # 7 个 System Prompt
-│   │   ├── arbitration.py           # 仲裁 Prompt（182行）
-│   │   ├── rewrite.py               # 改写 Prompt
-│   │   ├── nlg.py                   # NLG Prompt
-│   │   ├── nlu.py                   # NLU Prompt
-│   │   ├── chat.py                  # 闲聊 Prompt
-│   │   └── correlation.py           # 关联 Prompt
-│   │
-│   ├── train/                       # BERT 训练框架（CarVoice train/ 移植）
-│   │   ├── core/                    # 自定义 BERT 实现（2159行）
-│   │   │   ├── modeling.py          # BertModel, BertConfig（1206行）
-│   │   │   ├── tokenization.py      # BertTokenizer（400行）
-│   │   │   ├── optimization.py      # BertAdam（289行）
-│   │   │   └── file_utils.py        # 文件工具（264行）
-│   │   ├── models/bert_tiny.py      # BERT Tiny 模型
-│   │   ├── train_eval.py            # train/test/evaluate
-│   │   ├── data_helper.py           # build_dataset/build_iterator
-│   │   ├── servers.py               # 推理服务（intent:8008, reject:8007, NLU:8009）
-│   │   ├── run.py                   # 训练入口
-│   │   └── models.py                # BERT 分类模型
-│   │
-│   ├── rl/                          # RL 模块（SU7_RAG src/rl/ 移植，12 文件）
-│   │   ├── web_reader.py            # WebPageReader（URL抓取+HTML→文本）
-│   │   ├── reward_model.py          # 6维奖励函数 + TRL GRPOTrainer 兼容
-│   │   ├── environment.py           # 工具路由环境（LocalSearch + WebSearch 多后端）
-│   │   ├── data_builder.py          # 网络兜底轨迹生成器
-│   │   ├── build_local_trajectories.py # 本地可答轨迹生成器
-│   │   ├── format_converter.py      # SFT/GRPO/ShareGPT 格式转换 + 标签修复
-│   │   ├── train_grpo.py            # GRPO 训练入口
-│   │   ├── infer_rl.py              # Search-R1 推理引擎
-│   │   ├── batch_eval.py            # RL 批量评测
-│   │   ├── rebalance_sft_data.py    # 训练数据再平衡
-│   │   └── verify_export.py         # 模型导出验证
-│   │
-│   ├── data_pipeline/               # 数据管道（SU7_RAG gen_qa/ 移植）
-│   │   ├── qa_generator.py          # QA 对生成
-│   │   ├── qa_filter.py             # 质量过滤
-│   │   ├── abbr_expander.py         # 缩写扩展
-│   │   └── dataset_builder.py       # Summary/Rerank 训练集构建
-│   │
-│   ├── eval/                        # 评估框架（SU7_RAG final_score.py 移植）
-│   │   ├── scorer.py                # 语义相似度 + 关键词加权
-│   │   └── ragas_eval.py            # RAGas 评估
-│   │
-│   └── shared/                      # 共享层
-│       ├── schemas.py               # Pydantic 模型
-│       ├── config.py                # 环境配置
-│       ├── logging.py               # 日志
-│       ├── errors.py                # 错误码
-│       ├── redis_client.py          # Redis（内存回退）
-│       └── utils.py                 # WRRF 融合算法 + merge_docs + post_processing
-│
-├── scripts/                         # 执行脚本（17 个）
+│   │   └── mock.py                  # Mock 开发
+│   ├── mcp/                         # MCP 协议 (Amap 13工具 + QQ音乐)
+│   ├── prompts/                     # 7个 System Prompt (逐字移植)
+│   ├── train/                       # BERT 训练框架 (CarVoice train/ 全部移植)
+│   │   ├── core/                    # 自定义 BERT (modeling 1206行 + tokenization 400行)
+│   │   ├── models/bert_tiny.py      # BERT Tiny
+│   │   ├── servers.py               # 推理服务 (intent:8008, reject:8007, NLU:8009)
+│   │   └── run.py                   # 训练入口
+│   ├── rl/                          # RL 模块 (SU7_RAG src/rl/ 全部移植, 12文件)
+│   ├── data_pipeline/               # 数据管道 (QA生成/过滤/缩写/训练集)
+│   ├── eval/                        # 评估框架 (语义+关键词 + RAGas)
+│   └── shared/                      # 共享层 (schemas/config/logging/redis/WRRF)
+├── scripts/                         # 执行脚本 (17个)
 │   ├── autodl_start.sh              # AutoDL 一键启动
 │   ├── start.sh / start.ps1         # 本地启动
 │   ├── start_all_services.sh        # 5服务并行启动
 │   ├── build_index.py               # RAG 索引构建
 │   ├── generate_data.py             # 训练数据生成
-│   ├── eval_rag.py                 # RAG 离线评估
-│   ├── run_agent.py                 # Agent 测试（交互/批量/评测）
-│   ├── download_models.py           # 模型下载（Agent + RAG）
+│   ├── eval_rag.py                  # RAG 离线评估
+│   ├── run_agent.py                 # Agent 测试 (交互/批量/评测)
+│   ├── download_models.py           # 模型下载 (Agent + RAG)
 │   ├── run_vllm.py                  # vLLM 自动启动
 │   ├── benchmark_vllm.py            # vLLM 性能压测
-│   ├── baseline_compare.py          # 基线对比（local vs OpenAI）
-│   ├── rl_infer.py                 # RL 推理入口
+│   ├── baseline_compare.py          # 基线对比
+│   ├── rl_infer.py                  # RL 推理入口
 │   ├── train_intent.py              # 意图模型训练
 │   ├── train_reject.py              # 拒识模型训练
-│   └── train_3class.py              # 三分类模型训练（Task/FAQ/Chitchat）
-│
-├── configs/                         # 训练配置
-│   ├── sft.yaml                     # LLaMA-Factory SFT
-│   ├── grpo.yaml                    # LLaMA-Factory GRPO
-│   ├── original_sft.yaml            # 原始 SFT 配置（参考）
-│   └── original_grpo.yaml           # 原始 GRPO 配置（参考）
-│
-├── data/                            # 手工整理源数据（21 个文件）
-│   ├── knowledge/                   # Xiaomi_SU7_Manual.pdf + su7_docs.json
-│   ├── nlu/                         # slot_intent(437) + intent_map(439) + class_labels + 测试语料
+│   └── train_3class.py              # 三分类模型训练
+├── configs/                         # 训练配置 (sft/grpo)
+├── data/                            # 手工整理源数据 (21个文件)
+│   ├── knowledge/                   # su7_docs.json + Xiaomi_SU7_Manual.pdf
+│   ├── nlu/                         # slot_intent(437) + intent_map(439) + 测试语料
 │   ├── training/                    # intent/reject 训练集 + 停用词 + 闲聊样本
-│   └── abbr/                        # 汽车术语缩写表（53 条）
-│
-├── tests/                           # 63 个测试用例（9 个文件）
-│   ├── test_classifier.py           # 意图分类（12 参数化）
-│   ├── test_router.py               # 路由决策（含高风险防绕过）
-│   ├── test_skills_registry.py      # 技能白名单
-│   ├── test_knowledge_citations.py  # 知识引用结构
-│   ├── test_gateway_api.py          # API 集成（含 WebSocket）
-│   ├── test_nlp.py                  # 仲裁/NLU/NLG/改写/拒识/关联
-│   ├── test_data_pipeline.py        # QA生成/过滤/缩写/数据集
-│   ├── test_eval.py                 # 评分/RAGas
-│   └── test_llm.py                  # LLM 工厂/Mock
-│
-├── docs/architecture.md             # 架构文档
-├── docker-compose.yml               # 容器编排
-├── Dockerfile
-├── pytest.ini
-├── requirements.txt
+│   └── abbr/                        # 汽车缩写表 (53条)
+├── tests/                           # 63个测试用例
 ├── .env.example
-└── .gitignore
+├── docker-compose.yml
+├── Dockerfile
+└── requirements.txt
 ```
