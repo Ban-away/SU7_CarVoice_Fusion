@@ -114,13 +114,13 @@ curl -X POST http://127.0.0.1:8080/api/v1/chat \
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d "{\"message\":\"SU7 续航是多少\"}"
-# → {"type":"faq_answer","citations":[{"source":"su7_manual.pdf","page":12}]}
+# → {"type":"faq_answer","text":"小米 SU7 标准版 CLTC 续航约 700km，长续航版本可达更高里程。；车机支持语音控制导航、媒体、空调和车辆设置，可通过唤醒词启动。","citations":[{"source":"su7_manual.pdf","page":12},{"source":"su7_quick_start.pdf","page":5}],"trace":{"route":"FAQ","classifier_confidence":0.85,"knowledge_hit_count":2,...}}
 
-# 天气 → Task（天气属于技能域）
+# 天气 → Task（天气属于技能域，Mock模式天气技能未注册，回退闲聊但route=Task）
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d "{\"message\":\"今天天气怎么样\"}"
-# → {"type":"task_result","text":"北京今天天气：晴，18~25℃，空气质量良好"}
+# → {"type":"chitchat","text":"你好，我是 SU7 车载语音助手，很高兴为你服务。","trace":{"route":"Task",...}}
 
 # Chitchat — 闲聊
 curl -X POST http://127.0.0.1:8080/api/v1/chat \

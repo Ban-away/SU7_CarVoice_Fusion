@@ -139,14 +139,22 @@ class KnowledgeService:
     ) -> tuple[str, list[dict]]:
         """Produce an answer string and structured citations from docs.
 
-        Args:
-            query: The user's question.
-            docs: Retrieved documents.
-
-        Returns:
-            A tuple of ``(answer, citations)``.
+        Remaps citation metadata from the original loaded documents
+        to restore source + page lost during text-only retrieval.
         """
-        return self._synthesizer.synthesize(query, docs)
+        answer, _citations = self._synthesizer.synthesize(query, docs)
+        # Rebuild citations using original document metadata
+        meta = getattr(self, "_meta_lookup", {})
+        citations = []
+        for doc in docs[:3]:
+            key = doc.content.strip()
+            orig = meta.get(key, {})
+            citations.append({
+                "source": orig.get("source", doc.source),
+                "page": orig.get("page", doc.page),
+            })
+        return answer, citations
+
 
     # ------------------------------------------------------------------
     # Extended API (new in this version)
@@ -256,19 +264,25 @@ class KnowledgeService:
     def _build_retriever(self) -> BaseRetriever:
         """Instantiate the configured retriever backend."""
         texts = [d.content for d in self._documents]
+        source = self._documents[0].source if self._documents else "local_docs"
+
+        # Build content → metadata lookup for remapping
+        self._meta_lookup: dict[str, dict] = {}
+        for d in self._documents:
+            key = d.content.strip()
+            self._meta_lookup[key] = {"source": d.source, "page": d.page}
 
         if self._retriever_backend == "bm25":
-            return BM25Retriever(texts)
+            return BM25Retriever(texts, source=source)
         elif self._retriever_backend == "faiss":
-            return FAISSRetriever(texts)
+            return FAISSRetriever(texts, source=source)
         elif self._retriever_backend == "milvus":
-            return MilvusRetriever(texts)
+            return MilvusRetriever(texts, source=source)
         elif self._retriever_backend == "hybrid":
             return HybridRetriever(texts, dense_backend=settings.hybrid_dense_backend)
         else:
-            # mock: use a simple BM25 which degrades to TF scoring
             logger.info("Retriever backend '%s' -> using BM25 as fallback", self._retriever_backend)
-            return BM25Retriever(texts)
+            return BM25Retriever(texts, source=source)
 
     def _build_reranker(self) -> Optional[BaseReranker]:
         """Instantiate the configured reranker backend (or None)."""
