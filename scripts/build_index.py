@@ -90,8 +90,10 @@ def main() -> None:
         texts = [p.get("text", "") for p in pages if p.get("text", "").strip()]
         logger.info("PDF 解析完成: %d 页有文本", len(texts))
 
-        chunker = SemanticChunker(chunk_size=512, chunk_overlap=50)
-        chunks = chunker.split(texts)
+        chunker = SemanticChunker(chunk_size=1024, chunk_overlap=100)
+        full_text = "\n".join(texts)
+        chunk_docs = chunker.chunk_text(full_text, source=str(pdf_path))
+        chunks = [doc.content for doc in chunk_docs]
         logger.info("语义分块完成: %d 个块", len(chunks))
 
     # 2. 备选：从 JSON 加载

@@ -26,7 +26,8 @@
 
 # 模型 & 训练产物目录
 model/
-models/
+/models/
+!/app/train/models/
 checkpoint/
 checkpoints/
 pretrained/

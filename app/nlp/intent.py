@@ -77,7 +77,7 @@ def predict_intent(text: str) -> tuple[str, str] | None:
         with torch.no_grad():
             tensor_ids = torch.tensor([ids]).to(device)
             tensor_mask = torch.tensor([mask]).to(device)
-            logits = model((tensor_ids, torch.tensor([len(tokens)]), tensor_mask))
+            logits = model(tensor_ids, tensor_mask)
 
         # Top-1 预测
         idx = torch.argmax(logits, dim=1).item()

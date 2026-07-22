@@ -285,13 +285,24 @@ curl -X POST http://127.0.0.1:8080/api/v1/knowledge/retrieve \
 curl -X POST http://127.0.0.1:8080/api/v1/chat \
   -H "Content-Type: application/json" -d '{"message":"你好"}'
 
-# 4. RAG 评估
+# 4. 数据质量检查
+python scripts/check_training_data.py
+python scripts/check_training_data.py --all  # 含 QA/Summary 数据
+
+# 5. 文档解析质量
+python scripts/evaluate_parse_quality.py
+
+# 6. BERT 模型精度评测
+python scripts/intent_benchmark.py --top-k 5
+python scripts/reject_benchmark.py
+
+# 7. RAG 评估
 python scripts/eval_rag.py --input data/training/qa_pairs/test_qa_pair_verify.json --dry-run
 
-# 5. vLLM 压测
+# 8. vLLM 压测
 python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1
 
-# 6. 基线对比
+# 9. 基线对比
 python scripts/baseline_compare.py --model local
 ```
 
@@ -373,17 +384,23 @@ python scripts/eval_rag.py --input data/training/qa_pairs/test_qa_pair_verify.js
 
 ## 脚本对照
 
-| 原始 | 融合 |
-|------|------|
-| CarVoice download_models.py | scripts/download_models.py |
-| CarVoice train/run.py | scripts/train_intent.py / train_reject.py |
-| CarVoice dialog.py / test.py | scripts/run_agent.py |
-| CarVoice server.sh | scripts/start_all_services.sh |
-| SU7_RAG build_index.py | scripts/build_index.py |
-| SU7_RAG generate_all_data.py | scripts/generate_data.py |
-| SU7_RAG final_score.py | scripts/eval_rag.py |
-| SU7_RAG infer.py / infer_rl.py | POST /api/v1/chat / scripts/rl_infer.py |
-| SU7_RAG deploy/ | scripts/run_vllm.py / benchmark_vllm.py / baseline_compare.py |
+| 原始 | 融合 | 说明 |
+|------|------|------|
+| CarVoice download_models.py | scripts/download_models.py | 合并两套模型清单 |
+| CarVoice train/run.py | scripts/train_intent.py / train_reject.py / train_3class.py | 三分类法（Task/FAQ/Chitchat） |
+| CarVoice dialog.py / test.py | scripts/run_agent.py | 交互 + 评测 + 批量模式 |
+| CarVoice server.sh | scripts/start_all_services.sh | 一键启动全部微服务 |
+| CarVoice test/intent_client.py | scripts/intent_benchmark.py | Top1/Top5 精度评测 |
+| CarVoice test/reject_client.py | scripts/reject_benchmark.py | Accuracy/P/R/F1 评测 |
+| CarVoice test/nlu_client.py | 待实现 (nlu_benchmark.py) | 意图+槽位联合评测 |
+| SU7_RAG build_index.py | scripts/build_index.py | PDF → BM25 + Milvus 索引 |
+| SU7_RAG generate_all_data.py | scripts/generate_data.py | QA 生成 + 过滤 + 数据集构建 |
+| SU7_RAG generate_sft_data.py | scripts/generate_sft_data.py | Summary + Rerank 训练数据 |
+| SU7_RAG final_score.py | scripts/eval_rag.py | 语义评分 + RAGas |
+| SU7_RAG evaluate_parse_quality.py | scripts/evaluate_parse_quality.py | PDF 解析质量报告 |
+| SU7_RAG check_training_data.py | scripts/check_training_data.py | 数据格式/完整性检查 |
+| SU7_RAG infer.py / infer_rl.py | POST /api/v1/chat / scripts/rl_infer.py | 推理入口 |
+| SU7_RAG deploy/ | scripts/run_vllm.py / benchmark_vllm.py / baseline_compare.py | vLLM 部署+压测+对比 |
 
 ---
 
@@ -407,22 +424,158 @@ SU7_CarVoice_Fusion/
 │   ├── data_pipeline/             # QA生成/过滤/缩写/训练集
 │   ├── eval/                      # scorer + RAGas
 │   └── shared/                    # schemas, config, logging, redis, utils(WRRF)
-├── scripts/                       # 17 执行脚本
+├── scripts/                       # 20 执行脚本
 │   ├── autodl_start.sh            # AutoDL 一键
-│   ├── build_index.py             # RAG 索引
-│   ├── generate_data.py           # 数据生成
-│   ├── eval_rag.py               # RAG 评估
-│   ├── run_agent.py               # Agent 测试
+│   ├── start_all_services.sh      # 多服务启动
+│   ├── start.sh / start.ps1       # 快速启动
 │   ├── download_models.py         # 模型下载
-│   ├── run_vllm.py / benchmark_vllm.py / baseline_compare.py  # vLLM
-│   ├── rl_infer.py               # RL 推理
 │   ├── train_intent.py / train_reject.py / train_3class.py    # BERT 训练
 │   ├── train_sft_unsloth.py       # Unsloth 加速训练
-│   └── start_all_services.sh      # 多服务启动
+│   ├── build_index.py             # RAG 索引
+│   ├── generate_data.py           # 数据生成
+│   ├── generate_sft_data.py       # SFT 数据构造 (Summary+Rerank)
+│   ├── eval_rag.py               # RAG 评估
+│   ├── evaluate_parse_quality.py  # 文档解析质量
+│   ├── check_training_data.py     # 训练数据质量检查
+│   ├── intent_benchmark.py        # 意图模型精度评测
+│   ├── reject_benchmark.py        # 拒识模型精度评测
+│   ├── run_agent.py               # Agent 测试
+│   ├── run_vllm.py / benchmark_vllm.py / baseline_compare.py  # vLLM
+│   └── rl_infer.py               # RL 推理
 ├── configs/                       # sft.yaml, grpo.yaml, ds_z3_config.json
 ├── data/                          # 手工整理源数据 (21 文件)
 ├── tests/                         # 63 测试用例
 ├── .env.example                   # 环境变量模板 (~40 项)
 ├── docker-compose.yml / Dockerfile
 └── requirements.txt
+```
+
+---
+
+## 测试记录 (2026-07-22)
+
+> 以下为逐步执行 README 流程时遇到的问题及修复记录。
+
+### 1. 缺少依赖：`huggingface_hub`
+
+- **问题**：`scripts/download_models.py` 依赖 `huggingface_hub`，但 `requirements.txt` 中未包含该包。
+- **现象**：`ImportError: huggingface_hub 未安装，请执行: pip install huggingface_hub`
+- **修复**：`pip install huggingface_hub`
+- **建议**：将 `huggingface_hub` 加入 `requirements.txt`。
+
+### 2. 缺少依赖：`python-dotenv`
+
+- **问题**：`download_models.py` 使用 `dotenv.load_dotenv()` 但 `requirements.txt` 未包含 `python-dotenv`。
+- **影响**：`dotenv` 导入失败时静默跳过 (try/except)，不影响功能但 `.env` 中的 `HF_TOKEN` 等不会被加载。
+- **建议**：将 `python-dotenv` 加入 `requirements.txt`。
+
+### 3. 下载模型需国内镜像
+
+- **问题**：在国内服务器直接访问 HuggingFace 官方源速度极慢或超时。
+- **修复**：`export HF_ENDPOINT=https://hf-mirror.com`
+- **建议**：README 中的下载命令添加 `HF_ENDPOINT=https://hf-mirror.com` 前缀说明。
+
+### 4. 环境检查
+
+| 测试环境 | 值 |
+|----------|-----|
+| Python | 3.12.3 |
+| GPU | RTX 4090 (48GB VRAM) |
+| 磁盘 | 50GB |
+| 内存 | 1TB |
+| CUDA | 13.2 |
+
+### 5. Mock 模式测试结果
+
+| # | 输入 | type | route | 结果 |
+|---|------|------|-------|------|
+| 1 | 请导航到公司 | `task_result` | Task | ✅ |
+| 2 | SU7 续航是多少 | `faq_answer` | FAQ | ✅ |
+| 3 | 今天天气怎么样 | `chitchat` | Task(回退) | ✅ |
+| 4 | 你好 | `chitchat` | Chitchat | ✅ |
+| 5 | 我饿了 | `clarification` | Unknown | ✅ |
+
+### 6. Pytest
+
+- **结果**：63/63 passed in 1.48s ✅
+
+### 7. 缺少依赖：`transformers`
+
+- **问题**：训练脚本 (`train_intent.py` / `train_reject.py`) 依赖 `transformers`，但 `requirements.txt` 中未包含。
+- **修复**：`pip install transformers`
+- **建议**：将 `transformers` 加入 `requirements.txt`。
+
+### 8. 缺少依赖：`PyMuPDF`
+
+- **问题**：`scripts/build_index.py` 解析 PDF 需要 `PyMuPDF` (fitz)，否则回退到 Mock 模式（无法提取真实文本）。
+- **修复**：`pip install PyMuPDF`
+- **建议**：将 `PyMuPDF` 加入 `requirements.txt` 或添加可选依赖说明。
+
+### 9. 代码缺陷：`app/train/models/` 包缺失
+
+- **问题**：`app/train/run.py` 导入 `from app.train.models.bert_tiny import Model`，但 `models/` 是单文件 `models.py` 而非包目录。
+- **修复**：
+  1. 创建 `app/train/models/` 目录，将 `models.py` 改为 `bert.py`
+  2. 创建 `app/train/models/__init__.py`
+  3. 新建 `app/train/models/bert_tiny.py`（3 层 BERT Tiny 分类器）
+  4. 修复模型 `forward()` 签名适配 `run.py` 调用方式
+- **影响**：无法运行意图分类和拒识模型训练。
+
+### 10. 代码缺陷：`scripts/build_index.py` 调用私有方法
+
+- **问题**：`chunker.split(texts)` 调用不存在的 `split` 方法，应使用 `chunker.chunk_text(text, source=...)`。
+- **修复**：改为 `chunk_docs = chunker.chunk_text(full_text, source=str(pdf_path))`。
+- **影响**：`AttributeError: 'SemanticChunker' object has no attribute 'split'`
+
+### 11. 代码缺陷：`app/knowledge/chunker.py` `_split` 递归溢出
+
+- **问题**：`chunk_overlap` 导致 `_split()` 递归时 `first` 长度不低于 `chunk_size`，造成无限递归（278 页 PDF 触发）。
+- **修复**：添加前向进度检查，当子段未缩短时强制在 `chunk_size` 处切分；用 `min(overlap, split_point // 2)` 限制重叠。
+- **影响**：`RecursionError: maximum recursion depth exceeded`
+
+### 12. RAG 模型下载失败（Xet 存储不兼容）
+
+- **问题**：hf-mirror 不支持 HuggingFace Xet 存储格式，导致 3 个模型下载 401 失败：
+  - `BAAI/bge-large-zh-v1.5`（缺 `pytorch_model.bin`）
+  - `Qwen/Qwen3-8B`（缺 `.safetensors` 权重文件）
+  - `shibing624/text2vec-base-chinese`（缺权重文件）
+- **尝试方案**：ModelScope 作为备选下载源。
+- **建议**：README 中添加 ModelScope 备选下载说明。
+
+### 14. 代码缺陷：`app/nlp/intent.py` 模型调用接口不匹配
+
+- **问题**：`intent.py` 以旧版 tuple 方式调用模型 `model((ids, lens, mask))`，与修复后的 `Model.forward(input_ids, attention_mask)` 签名不匹配。
+- **修复**：改为 `model(tensor_ids, tensor_mask)`。
+- **影响**：BERT 意图预测失败，回退到规则/LLM。
+
+### 15. Agent 测试结果
+
+| # | 输入 | type | route | 结果 |
+|---|------|------|-------|------|
+| 1 | 请导航到公司 | `task_result` | Task (Go_Company) | ✅ |
+| 2 | SU7 续航是多少 | `faq_answer` | FAQ | ✅ |
+| 3 | 你好 | `chitchat` | Chitchat | ✅ |
+| 4 | 播放周杰伦的歌 | `task_result` | Task (Media_Control) | ✅ |
+
+> BERT 意图模型加载成功: 439 类, device=cuda
+
+### 16. 完整测试流程总结
+
+| 步骤 | 状态 | 备注 |
+|------|------|------|
+| 环境检查 | ✅ | RTX 4090, Python 3.12.3, CUDA 13.2 |
+| pip install | ✅ | 需手动补装 4 个缺失依赖 |
+| Mock 服务启动 | ✅ | uvicorn app.main:app |
+| curl 验证 (5 项) | ✅ | 全部匹配预期 |
+| pytest (63 项) | ✅ | 63 passed, 1.48s |
+| 下载 Agent 模型 | ✅ | RoBERTa-wwm-ext + BERT Tiny |
+| 下载 RAG 模型 | ⚠️ | 3/6 需模型因 Xet 存储不兼容失败 |
+| Agent 训练 (意图) | ✅ | 3 epoch, 模型保存 410MB |
+| Agent 训练 (拒识) | ✅ | 3 epoch, 模型保存 25MB |
+| BM25 索引构建 | ✅ | 278 页 PDF → 144 chunks |
+| 数据生成 | ⚠️ | Mock 模式产出 0 条 QA |
+| SFT 微调 | ⏭️ | 需 Qwen3-8B (ModelScope 下载中) |
+| GRPO | ⏭️ | 需 Qwen3-8B + SFT adapter |
+| RAG 评估 | ⏭️ | 无 test QA 文件 |
+| run_agent 测试 | ✅ | 4/4 路由正确, BERT 模型接入成功 |
 ```

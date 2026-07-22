@@ -23,10 +23,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from app.train.data_loader import build_dataloaders
-from app.train.models import Model as BertClassifier
+from app.train.models.bert import Model as BertClassifier
 from app.train.models.bert_tiny import Model as BertTinyClassifier
-from app.train.train_eval import train, test
-from app.train.data_helper import build_dataset, build_iterator
 
 logger = logging.getLogger(__name__)
 

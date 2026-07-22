@@ -154,11 +154,18 @@ class SemanticChunker:
             # Force split at chunk boundary
             split_point = self._chunk_size
 
-        # Make two segments with overlap
-        first = text[: split_point + self._chunk_overlap // 2].strip()
-        second = text[split_point - self._chunk_overlap // 2 :].strip()
+        # Make two segments with overlap, but ensure forward progress
+        overlap = min(self._chunk_overlap // 2, split_point // 2)
+        first = text[: split_point + overlap].strip()
+        second = text[split_point - overlap :].strip()
 
-        # Recurse if second segment is still too long
+        # Guard against infinite recursion: ensure each half is strictly shorter
+        if len(first) >= len(text) or len(second) >= len(text):
+            # Fallback: force split at exact chunk_size
+            first = text[: self._chunk_size].strip()
+            second = text[self._chunk_size :].strip()
+
+        # Recurse if segment is still too long
         first_parts = self._split(first) if len(first) > self._chunk_size else [first]
         second_parts = (
             self._split(second) if len(second) > self._chunk_size else [second]
