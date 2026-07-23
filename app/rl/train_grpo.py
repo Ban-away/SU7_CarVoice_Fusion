@@ -69,22 +69,23 @@ def run_grpo():
         logger.info("GRPO training started...")
         training_args = GRPOConfig(
             output_dir="models/qwen3_lora_grpo",
-            num_train_epochs=3,
+            num_train_epochs=1,
+            max_steps=5,
             per_device_train_batch_size=1,
-            gradient_accumulation_steps=8,
+            gradient_accumulation_steps=4,
             learning_rate=1e-6,
-            logging_steps=5,
-            save_steps=100,
-            bf16=True,
-            max_new_tokens=1536,
-            temperature=0.7,
+            logging_steps=1,
+            save_steps=999,
+            fp16=True,
+            report_to="none",
+            num_generations=4,
         )
         trainer = GRPOTrainer(
             model=model,
             args=training_args,
             train_dataset=data_path,
             reward_funcs=reward_fn,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
         )
         trainer.train()
         trainer.save_model("models/qwen3_lora_grpo_final")

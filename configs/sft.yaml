@@ -4,22 +4,24 @@
 # Usage: llamafactory-cli train configs/sft.yaml
 
 ### Model
-model_name_or_path: Qwen/Qwen3-8B
+model_name_or_path: /root/autodl-tmp/SU7_CarVoice_Fusion/models/Qwen3-8B
 template: qwen3
 enable_thinking: false
 
 ### Training
 stage: sft
+do_train: true
 finetuning_type: lora
 lora_rank: 16
 lora_target: all
-quantization_bit: 4
-quantization_method: bitsandbytes
+# quantization_bit: 4  # disabled: bitsandbytes broken on CUDA 13
+# quantization_method: bitsandbytes
 
 ### Data
 dataset: su7_carvoice_sft
-max_samples: 2000
-cutoff_len: 3072
+dataset_dir: /root/autodl-tmp/SU7_CarVoice_Fusion/LLaMA-Factory-main/data
+max_samples: 500
+cutoff_len: 512
 packing: false
 
 ### Output
@@ -30,17 +32,19 @@ eval_steps: 200
 
 ### Hyperparams
 learning_rate: 5.0e-5
-num_train_epochs: 5
+num_train_epochs: 1
+max_steps: 5
 max_grad_norm: 1.0
 warmup_ratio: 0.05
 lr_scheduler_type: cosine
 per_device_train_batch_size: 2
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 1
 
 ### Evaluation
 val_size: 0.08
 per_device_eval_batch_size: 2
-eval_strategy: steps
+eval_strategy: "no"
 
 ### System
 fp16: true
+report_to: none

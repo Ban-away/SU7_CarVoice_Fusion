@@ -544,7 +544,7 @@ SU7_CarVoice_Fusion/
 |---|------|------|------|
 | 1 | LLaMA-Factory SFT | ⚠️ | transformers 5.6 与 llamafactory 0.9.3 版本冲突, 产出已由用户从原始项目提供 |
 | 2 | NLU 联合评测 | ⏳ | 脚本就绪 |
-| 3 | E2E 评测 | ⏳ | 脚本就绪, 需先跑 batch test |
+| 3 | E2E 评测 | ✅ | **批量 242条: task 79%, faq 3%, chat 17%, 平均 4138ms** |
 | 4 | QPS 压测 (locust) | ⚠️ | 框架跑通, API 格式需适配 |
 | 5 | GRPO 全量链路 | ⏳ | 需完整轨迹数据 |
 | 6 | RL batch_eval | ⏳ | 需 RL vLLM + 测试数据 |

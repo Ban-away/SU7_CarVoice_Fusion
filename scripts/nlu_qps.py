@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 load_dotenv()
 import random
 import uuid
+import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)) + "/..")
 from locust import HttpUser, task, between
 
 
