@@ -84,6 +84,19 @@ _RE_READ_PAGE    = re.compile(r"<read_page>(.*?)</read_page>",     re.DOTALL)
 # Core: Search-R1 generate-while-retrieving loop
 # ────────────────────────────────────────────────────────────
 
+class RLInferenceEngine:
+    """Wrapper for RL inference; compatible with batch_eval interface."""
+    def __init__(self, vllm_url: str = "http://127.0.0.1:8000/v1", model: str = "su7_rl"):
+        from openai import OpenAI
+        from app.rl.environment import RetrievalEnvironment
+        self.llm_client = OpenAI(base_url=vllm_url, api_key="not-needed")
+        self.model = model
+        self.env = RetrievalEnvironment()
+
+    def run(self, question: str) -> dict:
+        return run_rl_inference(question, self.llm_client, self.env, self.model, verbose=False)
+
+
 def run_rl_inference(
     question:    str,
     llm_client,          # OpenAI client (connected to vLLM)

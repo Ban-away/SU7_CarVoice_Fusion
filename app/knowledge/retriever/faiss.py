@@ -137,6 +137,28 @@ class FAISSRetriever(BaseRetriever):
             logger.exception("FAISS retrieval failed; using random fallback")
             return self._random_fallback(query, top_k)
 
+    def save(self, path: str) -> None:
+        """Save FAISS index and document store to disk."""
+        import pickle, os
+        os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+        data = {"index": self._index, "docs": self._raw_docs, "embeddings": self._doc_embeddings, "source": self._source}
+        with open(path, "wb") as f:
+            pickle.dump(data, f)
+        logger.info("FAISS index saved to %s", path)
+
+    @classmethod
+    def load(cls, path: str) -> "FAISSRetriever":
+        """Load FAISS index from disk."""
+        import pickle
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        obj = cls.__new__(cls)
+        obj._index = data["index"]
+        obj._raw_docs = data["docs"]
+        obj._doc_embeddings = data["embeddings"]
+        obj._source = data.get("source", "local_docs")
+        return obj
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

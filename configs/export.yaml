@@ -1,0 +1,7 @@
+model_name_or_path: /root/autodl-tmp/SU7_CarVoice_Fusion/models/Qwen3-8B
+adapter_name_or_path: /root/autodl-tmp/SU7_CarVoice_Fusion/LLaMA-Factory-main/saves/qwen3-8b/lora/sft
+template: qwen3
+finetuning_type: lora
+export_dir: /root/autodl-tmp/SU7_CarVoice_Fusion/LLaMA-Factory-main/output/qwen3_lora_sft_test
+export_size: 5
+export_device: cpu

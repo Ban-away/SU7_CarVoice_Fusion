@@ -44,8 +44,8 @@ COL_NAME = "hybrid_bge_large_splade_v2"
 SPARSE_TOPK = 200
 
 # Default model paths (override via config or env)
-BGE_MODEL = "BAAI/bge-large-zh-v1.5"
-SPLADE_MODEL = "naver/splade-v2-doc"
+BGE_MODEL = "/root/autodl-tmp/SU7_CarVoice_Fusion/models/BAAI/bge-large-zh-v1.5"
+SPLADE_MODEL = "/root/autodl-tmp/SU7_CarVoice_Fusion/models/naver/splade-cocondenser-ensembledistil"
 
 
 def _mean_pooling(last_hidden_state: "torch.Tensor", attention_mask: "torch.Tensor") -> "torch.Tensor":
@@ -75,20 +75,37 @@ class HybridEmbeddingHandler:
         self.dense_device = f"cuda:0" if num_gpus >= 1 else device
         logger.info("BGE-Large loading on %s", self.dense_device)
         self.dense_tokenizer = AutoTokenizer.from_pretrained(dense_model_path)
-        self.dense_model = AutoModel.from_pretrained(
-            dense_model_path, torch_dtype=torch.float16, device_map=self.dense_device
-        ).eval()
+        try:
+            from sentence_transformers import SentenceTransformer
+            self.dense_model = SentenceTransformer(dense_model_path, device=self.dense_device)
+            self._dense_is_sbert = True
+        except ImportError:
+            self.dense_model = AutoModel.from_pretrained(
+                dense_model_path, torch_dtype=torch.float16, device_map=self.dense_device
+            )
+            self._dense_is_sbert = False
 
+        self.dim = {"dense": self.dense_model.config.hidden_size if not getattr(self, '_dense_is_sbert', False) else self.dense_model.get_sentence_embedding_dimension()}
+
+        # SPLADE: try loading, fall back to dense-only if unavailable
         self.sparse_device = f"cuda:1" if num_gpus >= 2 else (f"cuda:0" if num_gpus >= 1 else device)
-        logger.info("SPLADE loading on %s", self.sparse_device)
-        self.sparse_tokenizer = AutoTokenizer.from_pretrained(splade_model_path)
-        self.sparse_model = AutoModelForMaskedLM.from_pretrained(
-            splade_model_path, torch_dtype=torch.float16, device_map=self.sparse_device
-        ).eval()
-
-        self.dim = {"dense": self.dense_model.config.hidden_size}
+        try:
+            logger.info("SPLADE loading on %s", self.sparse_device)
+            self.sparse_tokenizer = AutoTokenizer.from_pretrained(splade_model_path)
+            self.sparse_model = AutoModelForMaskedLM.from_pretrained(
+                splade_model_path, torch_dtype=torch.float16, device_map=self.sparse_device
+            ).eval()
+            self._has_sparse = True
+        except Exception as e:
+            logger.warning("SPLADE unavailable (%s), using dense-only mode", str(e)[:100])
+            self.sparse_tokenizer = None
+            self.sparse_model = None
+            self._has_sparse = False
 
     def _encode_dense(self, texts: list[str]) -> list[list[float]]:
+        if getattr(self, '_dense_is_sbert', False):
+            emb = self.dense_model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+            return emb.tolist()
         inputs = self.dense_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(self.dense_device)
         with torch.no_grad():
             outputs = self.dense_model(**inputs)
@@ -123,7 +140,8 @@ class HybridEmbeddingHandler:
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
             dense_all.extend(self._encode_dense(batch))
-            sparse_all.extend(self._encode_sparse(batch))
+            if self._has_sparse:
+                sparse_all.extend(self._encode_sparse(batch))
             torch.cuda.empty_cache()
         return {"dense": dense_all, "sparse": sparse_all}
 

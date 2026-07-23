@@ -20,11 +20,15 @@ import sys
 
 logger = logging.getLogger(__name__)
 
-SFT_CONFIG = "configs/original_sft.yaml"
-GRPO_CONFIG = "configs/original_grpo.yaml"
+SFT_CONFIG = "configs/sft.yaml"
+GRPO_CONFIG = "configs/grpo.yaml"
 
 
 def run_sft():
+    sft_adapter = os.getenv("GRPO_SFT_ADAPTER", "LLaMA-Factory-main/saves/qwen3-8b/lora/sft")
+    if os.path.exists(sft_adapter):
+        logger.info("SFT adapter already exists at %s — skipping SFT warm-up", sft_adapter)
+        return
     logger.info("Starting SFT warm-up...")
     cmd = ["llamafactory-cli", "train", SFT_CONFIG]
     subprocess.run(cmd, check=True)
@@ -99,7 +103,7 @@ def run_grpo():
 
 def run_export():
     logger.info("Exporting merged model...")
-    cmd = ["llamafactory-cli", "export", SFT_CONFIG]
+    cmd = ["llamafactory-cli", "export", "configs/export.yaml"]
     subprocess.run(cmd, check=True)
 
 

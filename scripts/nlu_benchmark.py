@@ -1,3 +1,6 @@
+import os, sys
+from pathlib import Path
+os.chdir(Path(__file__).resolve().parent.parent)
 from dotenv import load_dotenv
 load_dotenv()
 import requests
@@ -131,7 +134,7 @@ if __name__ == '__main__':
     import sys
     verbose = "--verbose" in sys.argv
 
-    fd = open("data/single_slots_new.txt")
+    fd = open("data/nlu/single_slots_new.txt")
     data = fd.readlines()
     intent_right = 0
     slots_right = 0
