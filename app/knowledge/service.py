@@ -16,7 +16,7 @@ from app.knowledge.retriever.base import BaseRetriever
 from app.knowledge.retriever.bm25 import BM25Retriever
 from app.knowledge.retriever.faiss import FAISSRetriever
 from app.knowledge.retriever.hybrid import HybridRetriever
-from app.knowledge.retriever.milvus import MilvusRetriever
+# Lazy: from app.knowledge.retriever.milvus import MilvusRetriever
 from app.knowledge.reranker.base import BaseReranker
 from app.knowledge.reranker.minicpm import MiniCPMReranker
 from app.knowledge.synthesizer import CitationSynthesizer

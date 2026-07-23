@@ -39,7 +39,7 @@ class MiniCPMReranker(BaseReranker):
 
     def __init__(
         self,
-        model_path: str = "openbmb/MiniCPM-Reranker",
+        model_path: str = "/root/autodl-tmp/SU7_CarVoice_Fusion/models/BAAI/bge-reranker-v2-minicpm-layerwise",
         device: str = "cpu",
         use_fp16: bool = False,
     ) -> None:
@@ -82,7 +82,7 @@ class MiniCPMReranker(BaseReranker):
     def _load_model(self, model_path: str, device: str, use_fp16: bool) -> None:
         """Attempt to load the MiniCPM reranker model and tokenizer."""
         try:
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+            from transformers import AutoModel, AutoTokenizer
         except ImportError:
             logger.warning("transformers not installed; using keyword-overlap fallback")
             return
@@ -91,7 +91,8 @@ class MiniCPMReranker(BaseReranker):
             self._tokenizer = AutoTokenizer.from_pretrained(
                 model_path, trust_remote_code=True
             )
-            self._model = AutoModelForSequenceClassification.from_pretrained(
+            # Load as CausalLM to get lm_head weights, use inner model for embeddings
+            self._model = AutoModel.from_pretrained(
                 model_path,
                 trust_remote_code=True,
                 torch_dtype=torch.float16 if use_fp16 else torch.float32,
@@ -125,8 +126,15 @@ class MiniCPMReranker(BaseReranker):
                     return_tensors="pt",
                 )
                 inputs = {k: v.to(self._model.device) for k, v in inputs.items()}  # type: ignore[union-attr]
-                logits = self._model(**inputs).logits  # type: ignore[union-attr]
-                new_scores = logits.view(-1).tolist()
+                if self._model is None:
+                    new_scores = [0.0] * len(docs)
+                else:
+                    with torch.no_grad():
+                        outputs = self._model(**inputs)
+                        # Mean pool → take L2 norm as relevance signal
+                        hidden = outputs.last_hidden_state.float()  # type: ignore[union-attr]
+                        pooled = hidden.mean(dim=1)  # [batch, dim]
+                        new_scores = pooled.norm(dim=-1).tolist()
 
             for doc, ns in zip(docs, new_scores):
                 doc.score = round(float(ns), 4)

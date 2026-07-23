@@ -1,12 +1,6 @@
-"""Web search client with mock fallback.
+"""Web search client — SerpAPI → Serper → Bing → Doubao chain with mock fallback."""
 
-Controlled by the ``web_search_enabled`` configuration flag.  When
-disabled, returns an empty result set.  When enabled, returns curated
-mock results keyed by topic — replace with a real search API in
-production.
-"""
-
-import logging
+import logging, os, requests
 
 from app.knowledge.models import RetrievedDoc
 from app.shared.config import get_settings
@@ -15,91 +9,83 @@ logger = logging.getLogger(__name__)
 
 
 class WebSearchClient:
-    """Web vertical-search client with a built-in mock fallback.
-
-    Parameters:
-        enabled: Force enable/disable.  When ``None``, reads the
-            ``WEB_SEARCH_ENABLED`` value from :func:`get_settings`.
-    """
-
-    # Curated mock responses keyed by topic keyword
-    _MOCK_HINTS: dict[str, str] = {
-        "续航": "官方发布中提到续航与环境温度、驾驶习惯和轮胎状态有关。",
-        "充电": "官方建议优先使用快充网络并开启预约充电降低峰值电价。",
-        "导航": "导航服务支持实时路况、充电站筛选和高速优选策略。",
-        "语音": "语音助手支持连续对话、多指令识别和自定义唤醒词。",
-        "空调": "空调系统支持分区温控、远程预调节和自动内外循环切换。",
-        "安全": "SU7 全系标配 AEB、车道保持、盲区监测等主动安全功能。",
-        "保养": "建议每 10,000 公里或 12 个月进行一次常规保养检查。",
-        "胎压": "标准胎压为 2.5 bar，冬季可适当增加 0.1-0.2 bar。",
-    }
+    """Real web search: SerpAPI → Serper → Bing → Doubao cascade."""
 
     _FALLBACK = "垂直检索补充：建议参考小米汽车官方帮助中心获取最新信息。"
 
     def __init__(self, enabled: bool | None = None) -> None:
-        if enabled is None:
-            settings = get_settings()
-            self._enabled = settings.web_search_enabled
-        else:
-            self._enabled = enabled
+        self._enabled = enabled if enabled is not None else get_settings().web_search_enabled
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # ── Public API ──────────────────────────────────────────────────────
 
     def search(self, query: str) -> list[RetrievedDoc]:
-        """Search the web vertical for *query*.
-
-        Returns:
-            A list of RetrievedDoc (empty when disabled or no match).
-        """
         if not self._enabled:
-            logger.debug("Web search disabled; returning empty result")
             return []
+        content = self._do_search(query)
+        return [RetrievedDoc(content=content, source="web_search", score=0.7)]
 
-        result = self._mock_search(query)
-        if result:
-            logger.debug("Web search hit for query: %s", query[:60])
-        else:
-            logger.debug("Web search no match for query: %s", query[:60])
-        return result
+    # ── Internal cascade ────────────────────────────────────────────────
 
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
+    def _do_search(self, query: str) -> str:
+        backends = []
+        if os.getenv("SERPAPI_KEY"): backends.append("serpapi")
+        if os.getenv("SERPER_API_KEY"): backends.append("serper")
+        if os.getenv("BING_SEARCH_KEY"): backends.append("bing")
+        backends.append("doubao")
 
-    @classmethod
-    def _mock_search(cls, query: str) -> list[RetrievedDoc]:
-        """Return curated mock results based on topic keywords in *query*."""
-        best = cls._FALLBACK
-        matched = False
-        for key, text in cls._MOCK_HINTS.items():
-            if key in query:
-                best = text
-                matched = True
-                break
+        for be in backends:
+            try:
+                return getattr(self, f"_{be}")(query)
+            except Exception:
+                logger.warning("Web search backend %s failed", be)
+        return self._FALLBACK
 
-        if not matched:
-            # Return the fallback but at a lower score
-            return [
-                RetrievedDoc(
-                    content=best,
-                    source="xiaomi_auto_web",
-                    page=None,
-                    score=0.5,
-                )
-            ]
+    def _serpapi(self, query: str) -> str:
+        resp = requests.get("https://serpapi.com/search", params={
+            "q": query, "hl": "zh-cn", "gl": "cn",
+            "api_key": os.environ["SERPAPI_KEY"], "num": 5,
+        }, timeout=15)
+        resp.raise_for_status()
+        results = resp.json().get("organic_results", [])
+        if not results: return ""
+        return "\n\n".join(
+            f"【{r.get('title','')}】\n{r.get('snippet','')}\n网址：{r.get('link','')}"
+            for r in results[:4]
+        )
 
-        return [
-            RetrievedDoc(
-                content=best,
-                source="xiaomi_auto_web",
-                page=None,
-                score=0.7,
-            )
-        ]
+    def _serper(self, query: str) -> str:
+        resp = requests.post("https://google.serper.dev/search",
+            headers={"X-API-KEY": os.environ["SERPER_API_KEY"], "Content-Type": "application/json"},
+            json={"q": query, "hl": "zh-cn", "gl": "cn", "num": 5}, timeout=15)
+        resp.raise_for_status()
+        results = resp.json().get("organic", [])
+        if not results: return ""
+        return "\n\n".join(
+            f"【{r.get('title','')}】\n{r.get('snippet','')}\n网址：{r.get('link','')}"
+            for r in results[:4]
+        )
+
+    def _bing(self, query: str) -> str:
+        resp = requests.get("https://api.bing.microsoft.com/v7.0/search",
+            headers={"Ocp-Apim-Subscription-Key": os.environ["BING_SEARCH_KEY"]},
+            params={"q": query, "mkt": "zh-CN", "count": 5}, timeout=15)
+        resp.raise_for_status()
+        results = resp.json().get("webPages", {}).get("value", [])
+        if not results: return ""
+        return "\n\n".join(
+            f"【{r.get('name','')}】\n{r.get('snippet','')}\n网址：{r.get('url','')}"
+            for r in results[:4]
+        )
+
+    def _doubao(self, query: str) -> str:
+        from openai import OpenAI
+        client = OpenAI(api_key=os.environ["DOUBAO_API_KEY"], base_url=os.environ["DOUBAO_BASE_URL"])
+        r = client.chat.completions.create(
+            model=os.environ.get("DOUBAO_MODEL_NAME", ""),
+            messages=[{"role": "user", "content": f"请提供关于以下问题的准确网络信息：\n{query}"}],
+            max_tokens=512, temperature=0.3)
+        return r.choices[0].message.content or ""
 
     @property
     def enabled(self) -> bool:
-        """Whether web search is currently enabled."""
         return self._enabled
