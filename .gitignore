@@ -123,3 +123,17 @@ data/training/benchmark/
 # Milvus 数据库文件
 *.db
 data/training/benchmark/
+unsloth_compiled_cache/
+unsloth_compiled_cache/
+log/
+data/processed_docs/
+
+# Generated data (training output)
+data/rl_data/
+data/training/sft_data/
+data/training/test_qa_pair_verify.json
+data/training/rl/
+
+# IDE
+.vscode/
+.idea/

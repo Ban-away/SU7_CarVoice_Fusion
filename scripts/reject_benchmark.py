@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 import argparse
 import logging
 import sys
@@ -24,6 +25,7 @@ import numpy as np
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.chdir(Path(__file__).resolve().parent.parent)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger(__name__)

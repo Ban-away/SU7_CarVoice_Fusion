@@ -20,12 +20,12 @@ class DoubaoClient(BaseLLMClient):
     def __init__(
         self,
         api_key: str = "",
-        endpoint: str = "https://ark.cn-beijing.volces.com/api/v3",
-        model: str = "ep-20240601170316-5dhwt",
+        base_url: str = "https://ark.cn-beijing.volces.com/api/v3",
+        model_name: str = "ep-20240601170316-5dhwt",
     ) -> None:
         self.api_key = api_key
-        self.endpoint = endpoint.rstrip("/")
-        self.model = model
+        self.endpoint = base_url.rstrip("/")
+        self.model = model_name
 
     def chat(
         self,

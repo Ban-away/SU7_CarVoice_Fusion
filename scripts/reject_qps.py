@@ -1,0 +1,34 @@
+"""
+运行命令：
+locust -f reject_benchmark.py  --host http://127.0.0.1:8007  --headless -u 1000 -r 100 -t 60s
+"""
+
+import os
+from dotenv import load_dotenv
+load_dotenv()
+import random
+import uuid
+from locust import HttpUser, task, between
+
+
+fd = open("data/training/reject/test.txt")
+samples = [k.split("\t")[0] for k in fd]
+
+class User(HttpUser):
+    wait_time = between(1, 1.5)
+
+    @task
+    def task_post_archive(self):
+        trace_id = f'cevi{uuid.uuid4().hex}'
+        port = os.environ['REJECT_PORT']
+        testServer = f'http://127.0.0.1:{port}'
+        path = '/reject-server/v1'
+        url = f'{testServer}{path}'
+        headers = {
+            'Content-Type': 'application/json'        }
+        data = {
+            "query": random.choice(samples),
+            "thres": 0.5,
+            "trace_id": trace_id
+        }
+        self.client.post(url, json=data, headers=headers)

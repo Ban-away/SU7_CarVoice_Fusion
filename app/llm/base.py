@@ -49,8 +49,15 @@ class BaseLLMClient(ABC):
 
 def create_llm_client(provider: str = "mock", **kwargs) -> BaseLLMClient:
     """Factory: return the configured LLM client."""
+    settings = None  # lazy import to avoid circular
     if provider == "doubao":
         from app.llm.doubao import DoubaoClient
+        if not kwargs:
+            from app.shared.config import get_settings
+            s = get_settings()
+            kwargs["api_key"] = s.doubao_api_key
+            kwargs["base_url"] = s.doubao_endpoint
+            kwargs["model_name"] = s.doubao_model
         return DoubaoClient(**kwargs)
     if provider == "vllm":
         from app.llm.vllm import VLLMClient

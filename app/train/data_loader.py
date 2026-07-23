@@ -11,14 +11,14 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader, Dataset
-from transformers import AutoTokenizer
+from app.train.core import BertTokenizer
 
 logger = logging.getLogger(__name__)
 
 
 class TextDataset(Dataset):
     def __init__(self, filepath: str, tokenizer_name: str, max_len: int = 32):
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        self.tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
         self.max_len = max_len
         path = Path(filepath)
         if not path.exists():
@@ -47,16 +47,14 @@ class TextDataset(Dataset):
         return len(self.texts)
 
     def __getitem__(self, idx):
-        encoding = self.tokenizer(
-            self.texts[idx],
-            max_length=self.max_len,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
+        tokens = self.tokenizer.tokenize(self.texts[idx])
+        tokens = (["[CLS]"] + tokens[:self.max_len-2] + ["[SEP]"])[:self.max_len]
+        ids = self.tokenizer.convert_tokens_to_ids(tokens)
+        mask = [1] * len(ids) + [0] * (self.max_len - len(ids))
+        ids = ids + [0] * (self.max_len - len(ids))
         return {
-            "input_ids": encoding["input_ids"].squeeze(0),
-            "attention_mask": encoding["attention_mask"].squeeze(0),
+            "input_ids": torch.tensor(ids, dtype=torch.long),
+            "attention_mask": torch.tensor(mask, dtype=torch.long),
             "labels": torch.tensor(self.labels[idx], dtype=torch.long),
         }
 

@@ -129,9 +129,9 @@ MODEL_PRESETS: Dict[str, List[ModelSpec]] = {
 MANUAL_ARTIFACTS = [
     "train/saved/intent/bert.ckpt          (意图分类模型，需本地训练)",
     "train/saved/reject/bert_tiny.ckpt      (拒识模型，需本地训练)",
-    "models/qwen3_lora_sft/                 (SFT 微调产物，需 LLaMA-Factory)",
-    "models/qwen3_lora_sft_int4/            (INT4 量化产物)",
-    "models/qwen3_lora_rl/                  (GRPO RL 产物)",
+    "LLaMA-Factory-main/output/qwen3_lora_sft/       (SFT 微调产物)",
+    "LLaMA-Factory-main/output/qwen3_lora_sft_int4/  (INT4 量化产物)",
+    "LLaMA-Factory-main/output/qwen3_lora_rl/        (GRPO RL 产物)",
     "LLaMA-Factory-main/output/             (所有训练输出)",
 ]
 
@@ -154,17 +154,53 @@ def resolve_base_dir(user_base_dir: str = "") -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _download_modelscope(spec: ModelSpec, target_dir: Path) -> bool:
+    """Try ModelScope first (faster in China, no Xet issues). Returns True on success."""
+    try:
+        from modelscope import snapshot_download as ms_download
+        import shutil
+        ms_download(spec.repo_id, cache_dir=str(target_dir))
+        # ModelScope nests files under models/REPO--NAME/snapshots/master/
+        # Flatten to target_dir
+        nested = list(target_dir.glob("models/*/snapshots/master/*"))
+        if nested:
+            for f in nested:
+                dest = target_dir / f.name
+                if not dest.exists():
+                    shutil.move(str(f), str(dest))
+            shutil.rmtree(target_dir / "models", ignore_errors=True)
+        return True
+    except Exception:
+        return False
+
 def download_one(spec: ModelSpec, base_dir: Path, hf_token: str = "") -> None:
     target_dir = base_dir / spec.target_rel_path
     target_dir.mkdir(parents=True, exist_ok=True)
     tag = f"[{spec.source}]" if spec.source else ""
     print(f"[INFO]{tag} downloading {spec.name} -> {target_dir}")
-    snapshot_download(
-        repo_id=spec.repo_id,
-        local_dir=str(target_dir),
-        local_dir_use_symlinks=False,
-        token=hf_token or None,
-    )
+
+    # 优先 ModelScope（国内快，无 Xet 问题）
+    if _download_modelscope(spec, target_dir):
+        print(f"[DONE]{tag} {spec.name} (ModelScope)")
+        return
+
+    # 回退 HuggingFace: 先 snapshot，失败则逐文件下载（绕过 Xet）
+    try:
+        snapshot_download(
+            repo_id=spec.repo_id,
+            local_dir=str(target_dir),
+            local_dir_use_symlinks=False,
+            token=hf_token or None,
+        )
+    except Exception:
+        print(f"[WARN]{tag} snapshot failed for {spec.name}, trying per-file download...")
+        from huggingface_hub import list_repo_files, hf_hub_download
+        for fname in list_repo_files(spec.repo_id):
+            if not (target_dir / fname).exists():
+                try:
+                    hf_hub_download(spec.repo_id, fname, local_dir=str(target_dir), token=hf_token or None)
+                except Exception:
+                    pass  # skip non-essential files
     print(f"[DONE]{tag} {spec.name}")
 
 

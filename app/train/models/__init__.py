@@ -1,2 +1,5 @@
-from app.train.models.bert import Model
-from app.train.models.bert_tiny import Model as BertTinyModel
+from app.train.models.bert import Model as BertClassifier
+from app.train.models.bert_tiny import Model as BertTinyClassifier
+# Legacy aliases
+Model = BertClassifier
+BertTinyModel = BertTinyClassifier

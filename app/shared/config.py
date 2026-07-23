@@ -7,6 +7,14 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 
+# Auto-load .env from project root
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    load_dotenv(_env_path)
+except ImportError:
+    pass
+
 
 def _to_bool(value: str | None, default: bool = False) -> bool:
     if value is None:

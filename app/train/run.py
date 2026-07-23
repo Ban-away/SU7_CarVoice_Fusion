@@ -23,9 +23,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from app.train.data_loader import build_dataloaders
-from app.train.models.bert import Model as BertClassifier
-from app.train.models.bert_tiny import Model as BertTinyClassifier
+from app.train.models import BertClassifier, BertTinyClassifier
 
+os.chdir(os.path.join(os.path.dirname(__file__), "..", ".."))
 logger = logging.getLogger(__name__)
 
 # Data paths relative to project root
