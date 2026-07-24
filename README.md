@@ -1,345 +1,540 @@
 # SU7_CarVoice_Fusion
 
-车载智能语音助手融合架构：**CarVoice_Agent**（主控框架）+ **XIAOMI_SU7_RAG**（知识检索）。
+> 小米 SU7 车载智能语音 Agent —— 任务技能执行 + 用户手册问答 + 百科闲聊，三路路由统一调度。
 
-三路路由统一调度：Task（技能执行）/ FAQ（手册问答）/ Chitchat（百科闲聊）。支持 BERT 意图识别、LLM Function Calling 槽位提取、RAG 可溯源检索、Search-R1 动态工具调用与 GRPO 强化学习。
+**核心能力**：意图识别 → 路由分发 → 工具调用 / RAG 检索 / 联网搜索 → 回复生成。支持 BERT 本地推理、LLM Function Calling、MCP 工具协议、Search-R1 自主检索决策。
 
-**验证环境**：RTX 4090 (48GB) ×2, Python 3.12, PyTorch 2.11, CUDA 13.2 | **验证日期**：2026-07-10 ~ 2026-07-24
+**验证环境**：RTX 4090 (48GB) ×2, Python 3.12, PyTorch 2.11, CUDA 13.2 | **日期**：2026-07-10 ~ 2026-07-24
 
 ---
 
-## 整体架构
+## 1. 整体架构
 
 ```
-用户输入 → 三级分类器（BERT→规则→LLM仲裁）→ 路由分发
-
-Task（技能执行）              FAQ（手册问答）             Chitchat（百科闲聊）
-  BERT意图粗召回                RAG检索管线                 拒识 + 关联判断
-  LLM Function Calling          BM25+Milvus→WRRF           → 联网搜索
-  → 槽位归一化                   →MiniCPM→LLM               (SerpAPI/Serper
-  → DM (maps/music/weather)     →citations[{source,page}]   /Bing/Doubao)
-  → MCP (Amap 13工具+QQ音乐)                                → LLM整合
-  → NLG友好回复                                          → 时效性问答
+用户输入
+  │
+  ▼
+┌─────────────────────────────────┐
+│       三级意图分类               │
+│  BERT(本地) → 规则 → LLM 仲裁    │
+└─────────────┬───────────────────┘
+              │
+      ┌───────┼───────┐
+      ▼       ▼       ▼
+    Task    FAQ   Chitchat
+  (技能执行)(手册问答)(百科闲聊)
+      │       │       │
+      ▼       ▼       ▼
+  ┌──────┐ ┌──────┐ ┌──────┐
+  │BERT  │ │RAG   │ │拒识  │
+  │意图  │ │检索  │ │检查  │
+  ├──────┤ ├──────┤ ├──────┤
+  │LLM   │ │BM25+ │ │多轮  │
+  │Func  │ │Milvus│ │关联  │
+  │Call  │ │→Mini │ │判断  │
+  ├──────┤ │CPM→  │ ├──────┤
+  │DM    │ │LLM   │ │联网  │
+  │对话  │ │生成  │ │搜索  │
+  ├──────┤ ├──────┤ ├──────┤
+  │MCP   │ │引用  │ │LLM   │
+  │工具  │ │拼装  │ │闲聊  │
+  ├──────┤ └──────┘ └──────┘
+  │NLG   │
+  │回复  │
+  └──────┘
+      │       │       │
+      └───────┼───────┘
+              ▼
+         统一响应
 ```
-
-### 意图分类
-
-| 级别 | 方案 | 实测准确率 |
-|------|------|:---:|
-| 1 | BERT 439类 (RoBERTa-wwm-ext, 31w语料) | **86.07%** Top-1 |
-| 2 | 启发式规则 | ~90% 常见场景 |
-| 3 | LLM 仲裁 (Doubao) | ~98% |
 
 ### 路由决策
 
-| 分类 | 触发条件 | 管线 | 输出 |
-|------|---------|------|------|
-| Task | 技能指令/疑问+技能域 | LLM→DM→MCP→NLG | task_result |
-| FAQ | 用户手册提问 | RAG → 引用拼装 | faq_answer + citations |
-| Chitchat | 百科闲聊 | 拒识+联网→LLM | chitchat |
+| 分类 | 典型问题 | 处理管线 | 输出 |
+|------|---------|---------|------|
+| **Task** | "导航到天安门"、"播放周杰伦的歌" | BERT 意图 → LLM Function Calling → DM → MCP 工具 → NLG | 任务执行结果 |
+| **FAQ** | "SU7 续航多少"、"怎么开空调" | RAG 检索 (BM25+Milvus→MiniCPM→LLM) | 手册答案 + 页码引用 |
+| **Chitchat** | "你好"、"今天天气怎么样" | 拒识检查 → 联网搜索 → LLM 闲聊 | 闲聊回复 |
 
-### 服务端口
+### 意图分类
 
-| 服务 | 端口 | 路径 |
-|------|------|------|
-| 融合主服务 | 8080 | `/api/v1/chat` |
-| 拒识服务 | 8007 | `/reject-server/v1` |
-| 意图服务 | 8008 | `/intent-server/v1` |
-| NLU 服务 | 8009 | `/chatnlu-server/v1` |
-| vLLM 推理 | 8000 | `/v1/models` |
-| Redis | 6379 | — |
-| MongoDB | 27017 | — |
+| 级别 | 方案 | 准确率 | 说明 |
+|------|------|:---:|------|
+| 1 | BERT (RoBERTa-wwm-ext, 31w 语料) | 86.07% Top-1 | 本地推理，<5ms |
+| 2 | 启发式规则 | ~90% | 祈使词 + 疑问句式 + 车辆信号词 |
+| 3 | LLM 仲裁 (Doubao) | ~98% | 处理隐含意图（"我饿了"→导航） |
 
 ---
 
-## 快速开始
+## 2. 环境要求
 
-### Mock 模式（30 秒启动）
+| 组件 | 用途 | 必需? |
+|------|------|:---:|
+| Python 3.12 + PyTorch 2.11 + CUDA 13.2 | 核心运行环境 | ✅ |
+| Redis | 会话存储、多轮改写缓存 | Mock 模式可跳过 |
+| MongoDB | RAG 文本块存储 | RAG 模式必需 |
+| Milvus Lite | 向量检索 | RAG 模式必需 |
+| vLLM | Qwen3-8B 推理服务 | 生产模式必需 |
+| SerpAPI / Serper / Bing API Key | 联网搜索 | Chitchat 模式可选 |
+
+---
+
+## 3. 快速开始（Mock 模式，无需 GPU）
+
+Mock 模式下所有 LLM 调用返回预设回复，适合验证流程是否跑通。
+
+### 3.1 安装依赖
 
 ```bash
-git clone https://github.com/Ban-away/SU7_CarVoice_Fusion.git
+git clone git@github.com:Ban-away/SU7_CarVoice_Fusion.git
 cd SU7_CarVoice_Fusion
+
+# 基础依赖
 pip install -r requirements.txt
-# 以下未列入 requirements.txt，需手动安装：
+
+# requirements.txt 未覆盖的依赖（需手动安装）
 pip install huggingface_hub transformers PyMuPDF python-dotenv
+```
+
+### 3.2 配置环境变量
+
+```bash
 cp .env.example .env
+```
+
+`.env` 中确认以下配置（Mock 模式保持默认即可）：
+
+```ini
+LLM_PROVIDER=mock          # mock 模式，不调用真实 LLM
+LLM_MODEL=mock
+API_KEY=sk-mock
+```
+
+### 3.3 启动服务
+
+```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-验证：
+看到 `Uvicorn running on http://0.0.0.0:8080` 表示启动成功。
+
+### 3.4 验证
+
 ```bash
+# 健康检查
 curl http://127.0.0.1:8080/healthz
-curl -X POST http://127.0.0.1:8080/api/v1/chat -d '{"message":"请导航到公司"}'
-curl -X POST http://127.0.0.1:8080/api/v1/chat -d '{"message":"SU7 续航是多少"}'
-curl -X POST http://127.0.0.1:8080/api/v1/chat -d '{"message":"你好"}'
+# → {"status": "ok"}
+
+# 任务型：导航
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"请导航到公司"}'
+# → {"type":"task_result","text":"...",...}
+
+# 问答型：手册查询
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"SU7 续航是多少"}'
+# → {"type":"faq_answer","text":"...","citations":[...],...}
+
+# 闲聊型：问候
+curl -X POST http://127.0.0.1:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"你好"}'
+# → {"type":"chitchat","text":"...",...}
 ```
 
-### 切生产模式
+---
 
-`.env` 中设置 `LLM_PROVIDER=doubao`，填写 API Key。
+## 4. 完整部署（生产模式）
 
-### 一键启动全部服务
+生产模式启动全部 7 个服务，三路路由完整可用。
+
+### 4.1 配置 .env
+
+```ini
+LLM_PROVIDER=doubao         # 或 vllm / openai
+LLM_MODEL=ep-2024xxxx       # 豆包模型 ID
+DOUBAO_API_KEY=your_key     # 豆包 API Key
+DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+
+# RAG
+RETRIEVER_BACKEND=milvus    # 或 faiss / bm25
+RERANKER_BACKEND=minicpm    # 或 none
+
+# 联网搜索（至少配一个）
+SERPAPI_KEY=your_key        # https://serpapi.com
+SERPER_API_KEY=your_key     # https://serper.dev
+BING_SEARCH_KEY=your_key    # https://portal.azure.com
+
+# 会话
+REDIS_URL=redis://localhost:6379/0
+MONGODB_URL=mongodb://localhost:27017
+```
+
+### 4.2 启动依赖服务
+
+```bash
+# Redis（会话存储）
+redis-server --port 6379 --daemonize yes
+
+# MongoDB（RAG 文本块存储）
+mongod --dbpath ./mongodb-data --fork --logpath ./mongodb.log
+
+# Milvus Lite（向量检索，Python 进程内启动，无需单独部署）
+```
+
+### 4.3 训练 / 下载必需模型
+
+```bash
+# 下载预训练模型（首次使用）
+export HF_ENDPOINT=https://hf-mirror.com
+python scripts/download_models.py --preset agent    # BERT 意图 + 拒识
+python scripts/download_models.py --preset rag      # BGE + SPLADE + MiniCPM
+```
+
+如果已经训练过 BERT 模型，确认 checkpoint 存在：
+```
+models/saved/intent/bert.ckpt       (392MB)
+models/saved/reject/bert_tiny.ckpt  (24MB)
+```
+
+### 4.4 构建 RAG 索引
+
+```bash
+# 解析 SU7 用户手册 PDF，构建 BM25 + FAISS + Milvus 索引
+python scripts/build_index.py --backend all --pdf data/knowledge/Xiaomi_SU7_Manual.pdf
+
+# 验证索引质量
+python scripts/check_training_data.py     # 7/7 数据检查通过
+python scripts/evaluate_parse_quality.py  # PDF 解析准确率 98.31%
+```
+
+### 4.5 启动推理服务
+
+```bash
+# 启动 vLLM 推理服务（Qwen3-8B INT4，5.7GB 显存）
+vllm serve LLaMA-Factory-main/output/qwen3_lora_sft_int4 --port 8000
+
+# 验证
+curl http://127.0.0.1:8000/v1/models
+# → {"data":[{"id":"qwen3_lora_sft_int4",...}]}
+```
+
+### 4.6 启动全部业务服务
 
 ```bash
 bash scripts/start_all_services.sh
 ```
 
+这会后台启动以下服务：
+
+| 服务 | 端口 | 用途 |
+|------|:---:|------|
+| 融合主服务 | 8080 | 对外 API 入口 |
+| 拒识服务 | 8007 | 问题拒识 |
+| 意图服务 | 8008 | BERT 意图分类 |
+| NLU 服务 | 8009 | 槽位提取 |
+
+### 4.7 端到端验证
+
+```bash
+# 运行测试套件
+pytest -q -v                          # 63 个用例
+
+# 单条推理验证
+python scripts/run_agent.py --query "导航到天安门"
+
+# 批量评测
+python scripts/run_agent.py --eval --file data/nlu/multi_test.txt
+```
+
 ---
 
-## 训练流程
+## 5. 模型训练
 
-### 1. 模型下载
+### 5.1 BERT 意图分类模型
+
+**目的**：训练 BERT 识别 439 类用户意图（导航、音乐、天气等），本地推理延迟 <5ms。
 
 ```bash
-export HF_ENDPOINT=https://hf-mirror.com
-python scripts/download_models.py --preset agent   # BERT
-python scripts/download_models.py --preset rag     # RAG
+# 训练（约 12 分钟，单卡）
+python scripts/train_intent.py
+
+# 输出
+# models/saved/intent/bert.ckpt (392MB)
+# 验证指标：Top-1 86.07%, Top-5 97.64%
 ```
 
-下载策略：ModelScope（国内优先）→ HF snapshot → HF 逐文件（绕过 Xet 存储）。
+- 基座模型：`chinese_roberta_wwm_ext`（哈工大）
+- 训练数据：31 万条中文车载场景语料
+- 架构：RoBERTa + Linear 分类头，全参数微调
 
-### 2. Agent 训练
+### 5.2 BERT-Tiny 拒识模型
+
+**目的**：判断用户问题是否应该拒绝回答（非车载领域、敏感问题等）。
 
 ```bash
-python scripts/train_intent.py   # 意图, 31w语料, ~12min → models/saved/intent/bert.ckpt (392MB)
-python scripts/train_reject.py   # 拒识, 32w语料, ~2min → models/saved/reject/bert_tiny.ckpt (24MB)
+# 训练（约 2 分钟，单卡）
+python scripts/train_reject.py
+
+# 输出
+# models/saved/reject/bert_tiny.ckpt (24MB)
+# 验证指标：Accuracy 89.56%
 ```
 
-### 3. RAG 索引构建
+- 基座模型：`roberta_tiny_clue`（CLUE 社区，3 层）
+- 训练数据：32 万条
+- 架构：3 层 BERT + Linear 二分类头
+
+### 5.3 Qwen3-8B SFT 微调
+
+**目的**：在 SU7 手册问答数据上微调 Qwen3-8B，提升手册问答质量。
+
+| 方案 | 显存需求 | 命令 | 适用场景 |
+|------|:---:|------|------|
+| peft + trl | 16GB | `python scripts/run_sft_minimal.py` | 最小验证 |
+| Unsloth | 12GB | `python scripts/train_sft_unsloth.py` | 单卡优化 |
+| LLaMA-Factory | 24GB | `llamafactory-cli train configs/sft.yaml` | 生产训练 |
+| DeepSpeed ZeRO-3 | 2×48GB | `deepspeed --num_gpus=2` | 双卡并行 |
 
 ```bash
-# 启动 MongoDB + Milvus
-mongod --dbpath /data/db --fork --logpath /var/log/mongodb/mongod.log
+# 以 LLaMA-Factory 为例
+llamafactory-cli train configs/sft.yaml
 
-# 构建索引
-python scripts/build_index.py --backend all --pdf data/knowledge/Xiaomi_SU7_Manual.pdf
+# 训练后 INT4 量化（部署用）
+# → LLaMA-Factory-main/output/qwen3_lora_sft_int4/ (5.7GB)
 
-# 数据检查
-python scripts/check_training_data.py      # 意图31w+拒识32w, 7/7通过
-python scripts/evaluate_parse_quality.py   # 解析准确率 98.31%
-```
-
-### 4. SFT 微调
-
-| 框架 | GPU | 命令 | 验证 |
-|------|:---:|------|:---:|
-| peft + trl | 1×16GB | `python scripts/run_sft_minimal.py` | ✅ |
-| Unsloth | 1×12GB | `python scripts/train_sft_unsloth.py` | ✅ |
-| LLaMA-Factory | 1×24GB | `llamafactory-cli train configs/sft.yaml` | ✅ |
-| DeepSpeed ZeRO-3 | 2×48GB | `deepspeed --num_gpus=2` 原生可用 | ✅ |
-
-> LLaMA-Factory 注意：`configs/sft.yaml` 需 `do_train: true`，注释掉 `quantization_bit`/`quantization_method`。
-
-### 5. vLLM 部署
-
-```bash
+# 启动 vLLM 推理
 vllm serve LLaMA-Factory-main/output/qwen3_lora_sft_int4 --port 8000
-python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1   # 1832 tok/s, TTFT 133ms
+
+# 压测
+python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1
+# → 1832 tok/s, TTFT 133ms
 ```
 
-### 6. GRPO 强化学习
+> **注意**：`configs/sft.yaml` 需确认 `do_train: true`，注释掉 `quantization_bit`/`quantization_method`（CUDA 13 + bitsandbytes 不兼容，训练时使用 FP16 而非 QLoRA 4-bit）。
 
-Search-R1 范式：模型自主决定何时检索、检索什么、何时终止，而非硬编码 pipeline。
+### 5.4 GRPO 强化学习（Search-R1）
 
-**五标签行动空间**：`<search_local>` / `<search_web>` / `<read_page>` / `<information>` / `<answer>`
+**目的**：训练模型自主决策检索策略——何时搜本地、何时联网、何时读页面、何时终止。
 
-**三级检索路由**：本地知识库 → 网络搜索 → 深度页面阅读 (WebWalker, 最多2跳)
+**核心思路**：不同于传统 RAG 的硬编码 pipeline（先搜 A 再搜 B），Search-R1 让模型**自己选择**每一步做什么。
 
-**6维奖励函数**：答案质量(0.40) + 工具合理性(0.15) + 探索深度(0.15) + 领域合规(0.15) + 来源标注(0.10) + 格式完整性(0.05)
+```
+推理示例：
+  问题: "SU7 冬季续航下降多少？"
+  → <search_local> SU7 冬季续航          ← 模型自主决定先搜本地
+  → <information> 手册相关段落...          ← 获得本地结果
+  → （内部判断：手册没写冬季数据）
+  → <search_web> SU7 冬季续航测试        ← 模型自主决定联网
+  → <information> 搜索结果 + URL           ← 获得网络结果
+  → <answer> 冬季续航约下降 30-40%...     ← 模型自主决定终止、回答
+```
+
+**奖励函数设计**（6 维度 / 最高 1.0）：
+
+| 维度 | 权重 | 评估内容 |
+|------|:---:|------|
+| 答案质量 | 0.40 | 答案是否基于检索到的信息、包含具体数据 |
+| 工具合理性 | 0.15 | 是否优先本地、本地不够才联网 |
+| 探索深度 | 0.15 | 是否必要时深度阅读网页、是否多轮检索 |
+| 领域合规 | 0.15 | 是否拒绝回答非车载领域问题 |
+| 来源标注 | 0.10 | 联网答案是否标注来源域名 |
+| 格式完整性 | 0.05 | 标签是否正确闭合 |
+
+**数据管线**：
 
 ```bash
-# 1. 生成轨迹
-python app/rl/data_builder.py --dry-run          # 网络兜底轨迹 (需 SerpAPI)
-python app/rl/build_local_trajectories.py         # 本地可答轨迹
+# 1. 生成训练轨迹（共 22,820 条）
+python app/rl/data_builder.py              # 500 条网络兜底轨迹（需 SerpAPI）
+python app/rl/build_local_trajectories.py  # 22,320 条本地可答轨迹
 
-# 2. 格式转换 + 再平衡
-python app/rl/format_converter.py
+# 2. 格式转换（合并为 GRPO / SFT 训练格式）
+python app/rl/format_converter.py          # → 1,500 条合并后样本
+
+# 3. 再平衡（防止本地/网络样本比例失衡）
 python app/rl/rebalance_sft_data.py
+```
 
-# 3. GRPO 训练 (双框架)
-#   方案A — TRL 单卡快速验证
+**训练**：
+
+```bash
+# 方案 A：TRL 单卡快速验证
 python app/rl/train_grpo.py --stage grpo
 
-#   方案B — VeRL 多卡生产训练 (需 flash-attn)
+# 方案 B：VeRL 多卡训练（21K+ 样本，多卡并行）
 python app/rl/train_grpo_verl.py --n-gpus 2
+```
 
-# 4. 导出模型
-python app/rl/train_grpo.py --stage export
+**推理与评测**：
 
-# 5. RL 推理 (Search-R1 自主检索)
+```bash
+# 启动 RL 模型推理
 vllm serve LLaMA-Factory-main/output/qwen3_lora_rl --port 8000 --served-model-name su7_rl
+
+# 单条推理（展示完整轨迹）
 python scripts/rl_infer.py --model su7_rl --show-trajectory
 
-# 6. RL 批量评测
+# 批量评测
 python app/rl/batch_eval.py --model su7_rl --vllm-url http://localhost:8000/v1 --dry-run
 ```
 
 ---
 
-## 验证结果
+## 6. 评测结果
 
 ### BERT 精度
 
-| 指标 | 实测 | 原始报告 |
-|------|:---:|:---:|
-| 意图 Top-1 | **86.07%** | 85.2% |
-| 意图 Top-5 | **97.64%** | 97.6% |
-| 拒识 Accuracy | **89.56%** | 89.7% |
-
-### RAG 评估 (predict.py, 1272条)
-
-| 指标 | 实测 |
+| 指标 | 实测值 |
 |------|:---:|
-| RAGAs context_recall | **88.47%** |
-| RAGAs context_precision | **97.64%** |
+| 意图 Top-1 | 86.07% |
+| 意图 Top-5 | 97.64% |
+| 拒识 Accuracy | 89.56% |
 
-### 性能
+### RAG 检索
+
+| 指标 | 实测值 |
+|------|:---:|
+| RAGAs context_recall | 88.47% |
+| RAGAs context_precision | 97.64% |
+| PDF 解析准确率 | 98.31% |
+
+### 推理性能
 
 | 指标 | 值 |
 |------|-----|
-| vLLM 吞吐率 | **1832 tok/s** |
-| TTFT 均值 | **133ms** |
-| 文档解析准确率 | **98.31%** |
+| vLLM 吞吐率 | 1832 tok/s |
+| TTFT 首 token 延迟 | 133ms |
+| 拒识服务 QPS | 89ms |
+| 意图服务 QPS | 180ms |
 
-### E2E 批量 (242条)
+### E2E 批量测试（242 条）
 
 | 类型 | 占比 |
-|------|------|
-| task_result | 79% |
-| chitchat | 17% |
-| faq_answer | 3% |
-
-### QPS
-
-| 服务 | 中位数 |
 |------|:---:|
-| 拒识 | **89ms** |
-| 意图 | **180ms** |
-| NLU | **1483ms** |
+| 任务执行 (task_result) | 79% |
+| 闲聊 (chitchat) | 17% |
+| 手册问答 (faq_answer) | 3% |
 
-### 全部验证清单
+### 全量验证清单
 
 | 模块 | 状态 | 说明 |
-|------|------|------|
-| Mock 推理 | ✅ | 5/5 curl |
+|------|:---:|------|
+| Mock 推理 | ✅ | 5/5 curl 通过 |
 | pytest | ✅ | 63/63 |
-| BERT 意图 | ✅ | 86.07% |
-| BERT 拒识 | ✅ | 89.56% |
-| NLU 评测 | ✅ | 服务在线 |
-| E2E 批量 | ✅ | 242条 |
-| QPS 压测 ×3 | ✅ | |
+| BERT 意图训练 | ✅ | 86.07% Top-1 |
+| BERT 拒识训练 | ✅ | 89.56% |
 | BM25 索引 | ✅ | 144 chunks |
 | FAISS 索引 | ✅ | |
-| Milvus 混合索引 | ✅ | Dense+Sparse |
+| Milvus 混合索引 | ✅ | Dense + Sparse |
 | PDF 解析 + 语义切分 | ✅ | 98.31% |
-| 联网搜索 | ✅ | SerpAPI→Serper→Bing→Doubao |
-| HyDE 扩写 + LLM 清洗 | ✅ | 豆包 API |
-| SFT (3框架) | ✅ | peft+Unsloth+LLaMA-Factory |
-| DeepSpeed ZeRO-3 | ✅ | 双卡 Qwen3-8B 16s |
-| vLLM 部署 | ✅ | INT4 5.7GB |
-| vLLM 压测 | ✅ | 1832 tok/s |
+| 联网搜索四级回退 | ✅ | SerpAPI → Serper → Bing → Doubao |
+| SFT 微调 (3 框架) | ✅ | peft + Unsloth + LLaMA-Factory |
+| DeepSpeed ZeRO-3 | ✅ | 双卡 Qwen3-8B |
+| vLLM INT4 部署 | ✅ | 5.7GB, 1832 tok/s |
+| RL 数据管线 | ✅ | 22,820 条轨迹生成 |
+| GRPO 验证训练 (TRL) | ✅ | 5 steps 流程验证 |
+| VeRL 训练脚本 | ✅ | Ray+NCCL+FSDP 初始化通过，21K+ 样本训练就绪 |
 | RL 推理 | ✅ | 五标签 + read_page |
-| RL 数据管线 | ✅ | 轨迹生成+转换 |
-| GRPO 训练 (TRL) | ✅ | 5 steps |
-| predict.py | ✅ | 88.47%/97.64% |
-| VeRL 框架 | ✅ | Ray+NCCL+FSDP 初始化通过 |
-| 全部模型下载 | ✅ | 8/8 |
+| NLU 评测 | ✅ | 服务在线 |
+| QPS 压测 ×3 | ✅ | 89 / 180 / 1483ms |
+| E2E 批量 | ✅ | 242 条 |
 | Redis / MongoDB / Milvus | ✅ | |
-| start_all_services | ✅ | 5/5 |
+| 全部模型下载 | ✅ | 8/8 |
 
 ---
 
-## 项目结构
+## 7. 项目结构
 
 ```
 SU7_CarVoice_Fusion/
 ├── app/
-│   ├── api/                HTTP + WebSocket
-│   ├── core/               编排器 (orchestrator, classifier, session)
-│   ├── nlp/                NLP (intent, reject, NLU, NLG, arbitration, rewrite, correlation)
-│   ├── skills/             技能定义 + DM (maps/music/weather)
-│   ├── knowledge/          RAG (BM25/FAISS/Milvus + MiniCPM + chunker + web_search)
-│   ├── llm/                LLM (doubao/vllm/openai/mock + llm_clean + llm_hyde)
-│   ├── mcp/                MCP (Amap 13工具+QQ音乐)
-│   ├── train/              BERT 训练 (core/models/servers)
-│   ├── rl/                 Search-R1 (data_builder, train_grpo, infer_rl, web_reader)
-│   ├── data_pipeline/      QA生成/过滤
-│   └── shared/             配置/日志/Redis
-├── scripts/                30+ 执行脚本
-├── configs/                sft/grpo/ds/export
-├── data/                   训练数据 + 知识库
-├── models/                 预训练模型 + BERT checkpoints
-├── LLaMA-Factory-main/     训练框架 + output/(SFT/INT4/RL)
-├── mongodb-7.0.20/         MongoDB 二进制
-├── tests/                  63 单元测试
-├── docs/                   架构文档
-└── CLAUDE.md
+│   ├── api/             HTTP + WebSocket 入口
+│   ├── core/            Agent 编排器 (orchestrator, classifier, session)
+│   ├── nlp/             NLP (intent, reject, NLU, NLG, arbitration, rewrite)
+│   ├── skills/          技能定义 + DM 对话管理 (maps/music/weather)
+│   ├── knowledge/       RAG 检索 (BM25/FAISS/Milvus + MiniCPM reranker + web_search)
+│   ├── llm/             LLM 客户端 (doubao/vllm/openai/mock)
+│   ├── mcp/             MCP 工具 (高德地图 13 工具 + QQ 音乐)
+│   ├── train/           BERT 训练 (models/servers)
+│   └── rl/              Search-R1 RL (data_builder, train_grpo, infer_rl, reward_model)
+├── scripts/             30+ 执行脚本（训练、评测、压测）
+├── configs/             sft.yaml / grpo.yaml / export.yaml
+├── data/                训练数据 + 知识库 + RL 轨迹
+├── models/              预训练模型 + BERT checkpoints
+├── LLaMA-Factory-main/  训练框架及产物 (SFT/INT4/RL)
+├── tests/               63 单元测试
+├── docs/                架构文档
+└── CLAUDE.md            AI 协作指南
 ```
 
 ---
 
-## 脚本对照
-
-| 原始 | 融合 |
-|------|------|
-| CarVoice `train/run.py` | `scripts/train_intent.py` `train_reject.py` |
-| CarVoice `server.sh` | `scripts/start_all_services.sh` |
-| CarVoice `test/*client*.py` | `scripts/*benchmark*.py` |
-| CarVoice `e2e_score.py` | `scripts/e2e_score.py` |
-| SU7_RAG `build_index.py` | `scripts/build_index.py` |
-| SU7_RAG `generate_all_data.py` | `scripts/generate_data.py` |
-| SU7_RAG `final_score.py` | `scripts/eval_rag.py` |
-| SU7_RAG `infer_rl.py` | `scripts/rl_infer.py` |
-| SU7_RAG `deploy/auto_vllm_server.py` | `scripts/run_vllm.py` |
-| SU7_RAG `deploy/benchmark.py` | `scripts/benchmark_vllm.py` |
-| SU7_RAG `predict.py` | `LLaMA-Factory-main/predict.py` |
-| SU7_RAG `llm_clean_client.py` | `app/llm/llm_clean.py` |
-| SU7_RAG `llm_hyde_client.py` | `app/llm/llm_hyde.py` |
-
-## API
+## 8. API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/healthz` | 健康检查 |
 | `POST` | `/api/v1/chat` | 单轮对话 |
 | `GET` | `/api/v1/skills` | 技能白名单 |
-| `POST` | `/api/v1/knowledge/retrieve` | 知识检索 |
+| `POST` | `/api/v1/knowledge/retrieve` | 知识检索（调试用） |
+| `WS` | `/ws/chat` | WebSocket 流式对话 |
+
+### 请求体
+
+```json
+{
+  "message": "导航到天安门",
+  "session_id": "optional-session-id",
+  "confirm": false
+}
+```
+
+### 响应体
+
+```json
+{
+  "type": "task_result | faq_answer | chitchat | clarification",
+  "text": "已为您规划前往天安门的路线...",
+  "citations": [{"source": "用户手册第 45 页", "page": 45}],
+  "trace": {
+    "route": "Task",
+    "classifier_confidence": 0.95,
+    "latency_ms": 234,
+    "session_id": "uuid"
+  },
+  "session_id": "uuid"
+}
+```
 
 ---
 
-## 遇到的问题与修复
+## 9. 常见问题
 
-### 代码缺陷
+### CUDA 13 + bitsandbytes 不兼容
 
-| # | 问题 | 修复 |
-|---|------|------|
-| 1 | `app/train/models/` 单文件非包 | 创建 bert.py + bert_tiny.py |
-| 2 | 多个脚本相对路径失效 | 统一 `os.chdir()` |
-| 3 | Doubao API Key 未注入 | `app/llm/base.py` 自动读取 settings |
-| 4 | `app/knowledge/chunker.py` 递归溢出 | 前向进度 guard |
-| 5 | `app/knowledge/web_search.py` 仅 mock | 升级为 SerpAPI 四级级联 |
-| 6 | `configs/sft.yaml` 缺 do_train | `do_train: true` |
-| 7 | `app/rl/infer_rl.py` 缺 RLInferenceEngine | 添加 wrapper 类 |
-| 8 | `app/rl/train_grpo.py` SFT warmup 调用 LLaMA-Factory | 已有 adapter 自动跳过 |
-| 9 | `app/knowledge/retriever/faiss.py` 缺 save/load | 补全序列化 |
-| 10 | `app/knowledge/retriever/milvus.py` 模型路径+Sparse格式 | 绝对路径+SPLADE fallback |
+训练 SFT 时使用 FP16 而非 QLoRA 4-bit。`configs/sft.yaml` 中注释掉 `quantization_bit` 和 `quantization_method`。
 
-### 依赖与兼容
+### HuggingFace Xet 存储下载 401
 
-| 问题 | 解决 |
-|------|------|
-| HF Xet 存储下载 401 | ModelScope + hf_hub_download 逐文件 |
-| LLaMA-Factory + transformers 5.x | `is_torch_sdpa_available`/`is_safetensors_available` 补丁 |
-| vLLM + ragas openai 冲突 | 锁定 `openai==2.47.0` |
-| MongoDB OpenSSL 不兼容 | 捆绑 libssl1.1 |
-| Milvus URI pymilvus 2.3+ 不兼容 | milvus-lite 本地服务 |
-| BGE/SPLADE/m3e config 缺失 | 权重反推架构 + config 补全 |
-| MiniCPM transformers 5.x 导入 | auto_map 本地化 + 函数补丁 |
-| predict.py ragas API 变更 | Dataset 替换 + 指标重命名 |
+使用 ModelScope 国内镜像或 `HF_ENDPOINT=https://hf-mirror.com`。
 
-### 缺失依赖需手动安装
+### vLLM + ragas openai 版本冲突
 
-`huggingface_hub` `transformers` `PyMuPDF` `python-dotenv`
+锁定 `openai==2.47.0`。
+
+### MongoDB OpenSSL 不兼容
+
+捆绑安装 `libssl1.1`：`dpkg -x libssl1.1.deb /usr/lib/x86_64-linux-gnu/`
+
+### Milvus 连接失败
+
+需先 `milvus-lite` 启动本地服务（`localhost:19530`），或 PyMilvus 版本降级到 2.3.x。
+
+### MiniCPM transformers 5.x 报错
+
+需要 `auto_map` 本地化 + `is_torch_sdpa_available` 函数补丁。
 
 ---
 
