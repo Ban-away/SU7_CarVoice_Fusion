@@ -202,12 +202,8 @@ python scripts/generate_sft_data.py              # → Summary+Rerank 12/3
 | peft + trl (FP16) | ≥16GB | `python scripts/run_sft_minimal.py` | ✅ loss 3.39→1.73 |
 | Unsloth 2x | ≥12GB | `python scripts/train_sft_unsloth.py` | ✅ loss 2.39→2.08, 1.5s/step |
 | LLaMA-Factory | ≥24GB | `llamafactory-cli train configs/sft.yaml` | ✅ loss 4.86 |
-
-> ⚠️ LLaMA-Factory 注意事项：
-> - `configs/sft.yaml` 必须设置 `do_train: true`
-> - CUDA 13 无 libnvJitLink，需注释掉 `quantization_bit`/`quantization_method`（改 FP16）
-> - 克隆版 LLaMA-Factory 需补丁 `is_torch_sdpa_available`（`model_utils/attention.py`）和 `is_safetensors_available`（`train/callbacks.py`）
-> - numpy<2.0 → 升级到 2.x 后需 sitecustomize.py 补丁 `np.long`/`np.ulong`
+| DeepSpeed ZeRO-3 | ≥48GB | `deepspeed --num_gpus=2` 原生可用 | ✅ Qwen3-8B 16s 加载 |
+| VeRL GRPO | ≥48GB | `python app/rl/train_grpo_verl.py --n-gpus 2` | ⚠️ 需 flash-attn |
 
 ```bash
 # LLaMA-Factory 导出
@@ -485,8 +481,8 @@ SU7_CarVoice_Fusion/
 | 11 | `models/roberta_tiny_clue/` | config 不匹配权重 | hidden_size=312, vocab=8021 |
 | 12 | `scripts/*.py` (多个) | 相对路径 | 统一 `os.chdir()` |
 | 13 | `app/rl/infer_rl.py` | 缺 RLInferenceEngine | 添加 wrapper 类 |
-| 14 | `app/rl/train_grpo.py` | SFT warmup 依赖 BNB | 已有 adapter 自动跳过 |
-| 15 | `configs/sft.yaml` | 缺 do_train + bitsandbytes 卡住 | `do_train:true` + 注释量化 |
+| 14 | `app/rl/train_grpo.py` | SFT warmup 调用 LLaMA-Factory | 已有 adapter 自动跳过 |
+| 15 | `configs/sft.yaml` | 缺 do_train | `do_train:true` |
 | 16 | `app/knowledge/retriever/faiss.py` | 缺 save/load | 补全序列化方法 |
 | 17 | `app/knowledge/retriever/milvus.py` | 模型路径+SPLADE 格式 | 绝对路径+SPLADE fallback |
 | 18 | `app/knowledge/retriever/__init__.py` | Milvus 自动连接 | 延迟导入 |
@@ -496,9 +492,7 @@ SU7_CarVoice_Fusion/
 | 问题 | 根因 | 解决方案 |
 |------|------|------|
 | HF Xet 存储 401 | hf-mirror 不支持 Xet CAS | ModelScope + hf_hub_download 逐文件 |
-| bitsandbytes 不可用 | CUDA 13 缺 libnvJitLink | SFT/GRPO 改用 FP16 |
 | LLaMA-Factory import 失败 | transformers 5.x 删函数 | `is_torch_sdpa_available`/`is_safetensors_available` 补丁 |
-| numpy≥2.0 不兼容 LLaMA-Factory | `np.long`/`np.ulong` 被删除 | sitecustomize.py 别名补丁 |
 | MongoDB 无法启动 | 二进制 Ubuntu22.04 (OpenSSL 1.1) | 捆绑 libssl1.1 .deb |
 | vLLM + ragas openai 冲突 | `openai>=1.0.0` 没 pin 版本 | 锁定 `openai==2.47.0` |
 | predict.py API 不兼容 | ragas 0.1.x vs 0.3.x | `EvaluationDataset`→`Dataset`, `LLMContextRecall`→`ContextRecall` |

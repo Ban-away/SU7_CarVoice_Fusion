@@ -1,23 +1,10 @@
-"""VeRL GRPO 强化学习训练 — 全量 21K+ 样本，多卡并行。
+"""VeRL GRPO 多卡分布式训练 (≥2 GPUs, 需 flash-attn, 生产级吞吐 3-5x vs TRL)。
 
-适用: 多卡 ≥ 2×24GB (RTX 3090/4090) 或 A100
-对比 TRL: 样本量 80→21K+, 吞吐 3-5x
-
-前置条件:
-  pip install verl
-  python app/rl/data_builder.py          # 生成轨迹
-  python app/rl/format_converter.py       # 转换格式
-  python app/rl/rebalance_sft_data.py    # 再平衡
+前置: pip install verl flash-attn
 
 用法:
-  # 单机 4 卡
-  python app/rl/train_grpo_verl.py --n_gpus 4
-
-  # 单机 2 卡
   python app/rl/train_grpo_verl.py --n_gpus 2
-
-  # 指定 SFT 模型
-  python app/rl/train_grpo_verl.py --sft_model models/qwen3_lora_sft
+  python app/rl/train_grpo_verl.py --n_gpus 4
 """
 
 from __future__ import annotations
@@ -35,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 def train_verl_grpo(
     data_path: str = "data/training/rl/trajectories_grpo.jsonl",
-    sft_model: str = "models/qwen3_lora_sft",
-    base_model: str = "Qwen/Qwen3-8B",
+    sft_model: str = "/root/autodl-tmp/SU7_CarVoice_Fusion/LLaMA-Factory-main/saves/qwen3-8b/lora/sft",
+    base_model: str = "/root/autodl-tmp/SU7_CarVoice_Fusion/models/Qwen3-8B",
     output_dir: str = "models/qwen3_lora_verl_grpo",
     n_gpus: int = 4,
     max_prompt_length: int = 2048,
@@ -62,7 +49,7 @@ def train_verl_grpo(
         logger.error("请先运行: python app/rl/data_builder.py && python app/rl/format_converter.py")
         return
 
-    # VeRL CLI 参数
+    # VeRL CLI 参数 — 完整配置 (all required params for VeRL 0.8.0)
     cmd = [
         sys.executable, "-m", "verl.trainer.main_ppo",
         f"data.train_files={data_path}",
@@ -70,16 +57,23 @@ def train_verl_grpo(
         f"data.max_response_length={max_response_length}",
         f"actor_rollout_ref.model.path={base_model}",
         f"actor_rollout_ref.model.lora_adapter_path={sft_model}",
+        f"critic.model.path={base_model}",
+        # Actor
         f"actor_rollout_ref.actor.optim.lr={learning_rate}",
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1",
         f"actor_rollout_ref.actor.ppo_mini_batch_size={micro_batch_size}",
         f"actor_rollout_ref.actor.ppo_epochs={total_epochs}",
         "actor_rollout_ref.actor.kl_loss_coef=0.01",
         "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
+        # Rollout
         "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
         f"actor_rollout_ref.rollout.n={n_gpus}",
         "actor_rollout_ref.rollout.temperature=0.7",
         "actor_rollout_ref.rollout.top_p=0.9",
-        "reward_model.reward_manager=naive",
+        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1",
+        # Critic
+        "critic.micro_batch_size_per_gpu=1",
+        # Trainer
         f"trainer.n_gpus_per_node={n_gpus}",
         f"trainer.total_epochs={total_epochs}",
         f"trainer.project_name=su7_carvoice_grpo",
@@ -91,15 +85,16 @@ def train_verl_grpo(
     logger.info("Starting VeRL GRPO training with %d GPUs...", n_gpus)
     logger.info("Command: verl.trainer.main_ppo %s", " ".join(cmd[3:]))
 
-    import subprocess
-    subprocess.run(cmd, check=True)
+    import subprocess, os
+    env = {**os.environ, "HF_HUB_OFFLINE": "1", "CUDA_VISIBLE_DEVICES": "0,1"}
+    subprocess.run(cmd, check=True, env=env)
 
 
 def main():
     parser = argparse.ArgumentParser(description="VeRL GRPO 训练")
     parser.add_argument("--data", default="data/training/rl/trajectories_grpo.jsonl")
-    parser.add_argument("--sft-model", default="models/qwen3_lora_sft")
-    parser.add_argument("--base-model", default="Qwen/Qwen3-8B")
+    parser.add_argument("--sft-model", default="/root/autodl-tmp/SU7_CarVoice_Fusion/LLaMA-Factory-main/saves/qwen3-8b/lora/sft")
+    parser.add_argument("--base-model", default="/root/autodl-tmp/SU7_CarVoice_Fusion/models/Qwen3-8B")
     parser.add_argument("--output", default="models/qwen3_lora_verl_grpo")
     parser.add_argument("--n-gpus", type=int, default=4)
     parser.add_argument("--max-prompt-len", type=int, default=2048)
