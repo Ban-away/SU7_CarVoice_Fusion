@@ -139,17 +139,39 @@ python scripts/benchmark_vllm.py --url http://127.0.0.1:8000/v1   # 1832 tok/s, 
 
 ### 6. GRPO 强化学习
 
-```bash
-# 轨迹生成
-python app/rl/data_builder.py --dry-run
-python app/rl/build_local_trajectories.py
+Search-R1 范式：模型自主决定何时检索、检索什么、何时终止，而非硬编码 pipeline。
 
-# 训练 (TRL)
+**五标签行动空间**：`<search_local>` / `<search_web>` / `<read_page>` / `<information>` / `<answer>`
+
+**三级检索路由**：本地知识库 → 网络搜索 → 深度页面阅读 (WebWalker, 最多2跳)
+
+**6维奖励函数**：答案质量(0.40) + 工具合理性(0.15) + 探索深度(0.15) + 领域合规(0.15) + 来源标注(0.10) + 格式完整性(0.05)
+
+```bash
+# 1. 生成轨迹
+python app/rl/data_builder.py --dry-run          # 网络兜底轨迹 (需 SerpAPI)
+python app/rl/build_local_trajectories.py         # 本地可答轨迹
+
+# 2. 格式转换 + 再平衡
+python app/rl/format_converter.py
+python app/rl/rebalance_sft_data.py
+
+# 3. GRPO 训练 (双框架)
+#   方案A — TRL 单卡快速验证
 python app/rl/train_grpo.py --stage grpo
 
-# 推理
+#   方案B — VeRL 多卡生产训练 (需 flash-attn)
+python app/rl/train_grpo_verl.py --n-gpus 2
+
+# 4. 导出模型
+python app/rl/train_grpo.py --stage export
+
+# 5. RL 推理 (Search-R1 自主检索)
 vllm serve LLaMA-Factory-main/output/qwen3_lora_rl --port 8000 --served-model-name su7_rl
 python scripts/rl_infer.py --model su7_rl --show-trajectory
+
+# 6. RL 批量评测
+python app/rl/batch_eval.py --model su7_rl --vllm-url http://localhost:8000/v1 --dry-run
 ```
 
 ---
