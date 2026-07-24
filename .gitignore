@@ -129,7 +129,14 @@ log/
 data/processed_docs/
 
 # Generated data (training output)
-data/rl_data/
+# 排除所有生成文件，只跟踪不可重新生成的种子/问题文件
+data/rl_data/*_trajectories*.json
+data/rl_data/*_trajectories*.jsonl
+data/rl_data/*_ckpt.jsonl
+data/rl_data/*_sft*.json
+data/rl_data/*_grpo*.jsonl
+data/rl_data/*_sharegpt*.json
+data/rl_data/rl_eval_*
 data/training/sft_data/
 data/training/test_qa_pair_verify.json
 data/training/rl/
