@@ -220,7 +220,7 @@ python scripts/rl_infer.py --model su7_rl --show-trajectory
 | RL 数据管线 | ✅ | 轨迹生成+转换 |
 | GRPO 训练 (TRL) | ✅ | 5 steps |
 | predict.py | ✅ | 88.47%/97.64% |
-| VeRL 框架 | ⚠️ | 初始化通过, 需 flash-attn |
+| VeRL 框架 | ✅ | Ray+NCCL+FSDP 初始化通过 |
 | 全部模型下载 | ✅ | 8/8 |
 | Redis / MongoDB / Milvus | ✅ | |
 | start_all_services | ✅ | 5/5 |
